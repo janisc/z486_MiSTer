@@ -28,5 +28,20 @@ the files as follows:
 - [boot0.rom](verilator/boot0.rom), [boot1.rom](verilator/boot1.rom), and disk
   images (`.vhd`) in `/media/fat/games/Z486`
 
+### Analog VGA output
+
+`Audio & Video` -> `VGA Output` selects what the analog VGA port carries:
+
+- `Scaler` (default): a copy of the HDMI scaler output, at the HDMI mode's
+  resolution and refresh rate.
+- `Native 31kHz`: the core's own VGA raster with the real 25.175/28.322 MHz dot
+  clocks, i.e. 31.5 kHz lines at 70 Hz (mode 13h, text) or 60 Hz (640x480).
+  This is the signal a PC CRT monitor expects. 15 kHz TVs cannot sync to it.
+  SVGA modes rendered through the MiSTer framebuffer have no real-time raster
+  and fall back to the scaler automatically. The 60 Hz VSync option is ignored
+  in this mode because its 26.9 kHz line rate is below the range of VGA
+  monitors. Sync polarity is always negative on both lines (a framework
+  property), which multisync monitors accept.
+
 Development and compatibility discussion is available in the
 [MiSTer FPGA forum thread](https://misterfpga.org/viewtopic.php?t=10667).

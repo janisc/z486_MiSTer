@@ -123,6 +123,7 @@ localparam CONF_STR = {
 	"P1,Audio & Video;",
 	"P1-;",
 	"P1OMN,Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
+	"P1O3,VGA Output,Scaler,Native 31kHz;",
 	"P1O4,VSync,60Hz,Variable;",
 	"P1O5,16/24bit mode,BGR,RGB;",
 	"P1O6,16bit format,1555,565;",
@@ -1016,7 +1017,6 @@ assign VGA_VS        = gamma_vs;
 assign VGA_DE        = gamma_de;
 assign VGA_F1        = 1'b0;
 assign VGA_SL        = 2'b00;
-assign VGA_SCALER    = 1'b1;
 assign VGA_DISABLE   = 1'b0;
 assign HDMI_FREEZE   = 1'b0;
 assign HDMI_BLACKOUT = 1'b0;
@@ -1035,7 +1035,15 @@ reg  [13:0] fb_stride;
 reg   [4:0] fb_fmt;
 reg         fb_off;
 reg         fb_force_60;
-assign video_f60 = ~status[4] | fb_force_60;
+// OSD "VGA Output": Scaler (default) copies the HDMI scaler to the analog port.
+// Native hands the core's own VGA raster (25.175/28.322 MHz dot clocks, 31.5 kHz
+// lines, 70/60 Hz frames) to the analog DAC, which is what a PC CRT expects.
+// Framebuffer (SVGA) modes have no real-time raster, so they always use the scaler,
+// and the 60 Hz pixel-clock retiming is disabled in native mode: the resulting
+// 26.9 kHz line rate is below the range of any VGA monitor.
+wire        vga_native = status[3];
+assign VGA_SCALER = vga_native ? fb_en : 1'b1;
+assign video_f60  = vga_native ? fb_en : (~status[4] | fb_force_60);
 always @(posedge clk_sys) begin
 	fb_force_60 <= fb_en || (fb_width > 12'd760);
 	fb_en       <= ~vga_flags[2] && |vga_flags[1:0];
@@ -1061,7 +1069,9 @@ assign FB_PAL_DOUT   = {vga_pal_d[17:12], vga_pal_d[17:16], vga_pal_d[11:6], vga
 assign FB_PAL_WR     = vga_pal_we;
 `endif
 `else
-assign video_f60 = ~status[4];
+wire vga_native = status[3];
+assign VGA_SCALER = ~vga_native;
+assign video_f60  = ~status[4] & ~vga_native;
 `endif
 
 assign LED_USER      = pll_locked;
