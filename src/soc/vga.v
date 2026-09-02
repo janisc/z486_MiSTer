@@ -60,6 +60,8 @@ module vga
 	output reg          vga_off,
 	output reg          vga_horiz_sync,
 	output reg          vga_vert_sync,
+	output              vga_hsync_neg,  // Misc Output bit 6: 1 = negative hsync polarity
+	output              vga_vsync_neg,  // Misc Output bit 7: 1 = negative vsync polarity
 	output reg  [7:0]   vga_r,
 	output reg  [7:0]   vga_g,
 	output reg  [7:0]   vga_b,
@@ -1700,6 +1702,11 @@ always @(posedge clk_vga) if (ce_video) vga_horiz_sync <= vgareg_horiz_sync;
 reg vgareg_vert_sync;
 always @(posedge clk_vga) if (ce_video) vgareg_vert_sync <= (vgaprep_vert_sync && crtc_timing_enable)? ~(general_vsync) : general_vsync;
 always @(posedge clk_vga) if (ce_video) vga_vert_sync <= vgareg_vert_sync;
+
+// Real sync polarity as programmed by the BIOS (used by the analog output; the
+// sync signals themselves get polarity-normalized by the MiSTer framework).
+assign vga_hsync_neg = general_hsync;
+assign vga_vsync_neg = general_vsync;
 
 always @(posedge clk_vga) if (ce_video) begin
 	vga_r <= (seq_screen_disable || vgareg_blank) ? 8'd0 : { dac_color[17:12], dac_color[17:16] };

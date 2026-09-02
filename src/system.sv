@@ -132,6 +132,8 @@ module system (
 	output wire        video_blank_n,
 	output wire        video_hsync,
 	output wire        video_vsync,
+	output wire        video_hsync_neg, // 1 = negative hsync polarity (VGA Misc Output bit 6)
+	output wire        video_vsync_neg, // 1 = negative vsync polarity (VGA Misc Output bit 7)
 	output wire [7:0]  video_r,
 	output wire [7:0]  video_g,
 	output wire [7:0]  video_b,
@@ -1211,6 +1213,8 @@ vga vga_inst
 	.vga_blank_n       (video_blank_n),
 	.vga_horiz_sync    (video_hsync),
 	.vga_vert_sync     (video_vsync),
+	.vga_hsync_neg     (video_hsync_neg),
+	.vga_vsync_neg     (video_vsync_neg),
 	.vga_r             (video_r),
 	.vga_g             (video_g),
 	.vga_b             (video_b),

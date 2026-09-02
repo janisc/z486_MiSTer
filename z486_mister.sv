@@ -21,6 +21,8 @@ module emu
 	output  [1:0] VGA_SL,
 	output        VGA_SCALER,
 	output        VGA_DISABLE,
+	output        VGA_HS_POS,   // analog output only: 1 = positive-going hsync (default negative)
+	output        VGA_VS_POS,   // analog output only: 1 = positive-going vsync (default negative)
 
 	input  [11:0] HDMI_WIDTH,
 	input  [11:0] HDMI_HEIGHT,
@@ -205,6 +207,8 @@ wire        ps2_mouse_clk_in;
 wire        ps2_mouse_data_in;
 
 wire        core_ce_pixel;
+wire        core_hs_neg;
+wire        core_vs_neg;
 wire  [7:0] core_r;
 wire  [7:0] core_g;
 wire  [7:0] core_b;
@@ -707,6 +711,8 @@ system #(
 	.video_blank_n       (core_de),
 	.video_hsync         (core_hs),
 	.video_vsync         (core_vs),
+	.video_hsync_neg     (core_hs_neg),
+	.video_vsync_neg     (core_vs_neg),
 	.video_r             (core_r),
 	.video_g             (core_g),
 	.video_b             (core_b),
@@ -1044,6 +1050,10 @@ reg         fb_force_60;
 wire        vga_native = status[3];
 assign VGA_SCALER = vga_native ? fb_en : 1'b1;
 assign video_f60  = vga_native ? fb_en : (~status[4] | fb_force_60);
+// Native mode: give the CRT the real VGA sync polarity (400-line modes are H-/V+,
+// 350-line H+/V-, 480-line H-/V-). Scaler mode keeps the framework default.
+assign VGA_HS_POS = vga_native & ~core_hs_neg;
+assign VGA_VS_POS = vga_native & ~core_vs_neg;
 always @(posedge clk_sys) begin
 	fb_force_60 <= fb_en || (fb_width > 12'd760);
 	fb_en       <= ~vga_flags[2] && |vga_flags[1:0];
@@ -1072,6 +1082,8 @@ assign FB_PAL_WR     = vga_pal_we;
 wire vga_native = status[3];
 assign VGA_SCALER = ~vga_native;
 assign video_f60  = ~status[4] & ~vga_native;
+assign VGA_HS_POS = vga_native & ~core_hs_neg;
+assign VGA_VS_POS = vga_native & ~core_vs_neg;
 `endif
 
 assign LED_USER      = pll_locked;

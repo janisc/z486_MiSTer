@@ -1341,6 +1341,9 @@ assign HDMI_TX_VS = hdmi_out_vs;
 assign HDMI_TX_DE = hdmi_out_de;
 assign HDMI_TX_D  = hdmi_out_d;
 
+// Core-requested sync polarity for the direct (non-scaler) analog output.
+wire vga_hs_pos, vga_vs_pos;
+
 /////////////////////////  VGA output  //////////////////////////////////
 
 `ifndef MISTER_DUAL_SDRAM
@@ -1523,8 +1526,8 @@ reg  [39:0] PhaseInc;
 	wire cs1 = vgas_en ? vgas_cs : vga_cs;
 	wire de1 = vgas_en ? vgas_de : vga_de;
 
-	assign VGA_VS = av_dis ? 1'bZ      :(((vgas_en ? (~vgas_vs ^ VS[12])                         : VGA_DISABLE ? 1'd1 : ~vga_vs) | csync_en) & subcarrier_out);
-	assign VGA_HS = av_dis ? 1'bZ      :  (vgas_en ? ((csync_en ? ~vgas_cs : ~vgas_hs) ^ HS[12]) : VGA_DISABLE ? 1'd1 : (csync_en ? ~vga_cs : ~vga_hs));
+	assign VGA_VS = av_dis ? 1'bZ      :(((vgas_en ? (~vgas_vs ^ VS[12])                         : VGA_DISABLE ? 1'd1 : (~vga_vs ^ vga_vs_pos)) | csync_en) & subcarrier_out);
+	assign VGA_HS = av_dis ? 1'bZ      :  (vgas_en ? ((csync_en ? ~vgas_cs : ~vgas_hs) ^ HS[12]) : VGA_DISABLE ? 1'd1 : (csync_en ? ~vga_cs : (~vga_hs ^ vga_hs_pos)));
 	assign VGA_R  = av_dis ? 6'bZZZZZZ :   vgas_en ? vgas_o[23:18]                               : VGA_DISABLE ? 6'd0 : vga_o[23:18];
 	assign VGA_G  = av_dis ? 6'bZZZZZZ :   vgas_en ? vgas_o[15:10]                               : VGA_DISABLE ? 6'd0 : vga_o[15:10];
 	assign VGA_B  = av_dis ? 6'bZZZZZZ :   vgas_en ? vgas_o[7:2]                                 : VGA_DISABLE ? 6'd0 : vga_o[7:2]  ;
@@ -1781,6 +1784,8 @@ emu emu
 
 `ifndef MISTER_DUAL_SDRAM
 	.VGA_DISABLE(VGA_DISABLE),
+	.VGA_HS_POS(vga_hs_pos),
+	.VGA_VS_POS(vga_vs_pos),
 `endif
 
 	.HDMI_WIDTH(direct_video ? 12'd0 : hdmi_width),
