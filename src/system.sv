@@ -139,6 +139,8 @@ module system (
 	output wire [7:0]  video_b,
 	input              video_f60,     // force VGA timing to 60 Hz; 0 preserves native refresh
 	input              video_border,	// show VGA overscan border (OSD)
+	input        [2:0] video_dbg_delay_chars, // DEBUG dial
+	input        [2:0] video_dbg_delay_dots,  // DEBUG dial
 
 	// SVGA framebuffer descriptor (from vga.v) -> MiSTer HPS framebuffer path
 	output wire [19:0] video_start_addr,
@@ -1236,7 +1238,9 @@ vga vga_inst
 	.vga_stride        (video_stride),
 	.vga_off           (video_off),
 	.vga_lores         (1'b0),
-	.vga_border        (video_border)
+	.vga_border        (video_border),
+	.vga_dbg_delay_chars (video_dbg_delay_chars),
+	.vga_dbg_delay_dots  (video_dbg_delay_dots)
 );
 
 

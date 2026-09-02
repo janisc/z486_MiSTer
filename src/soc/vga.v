@@ -83,7 +83,9 @@ module vga
 	output      [1:0]   vga_write_mode,
 
 	input               vga_lores,
-	input               vga_border
+	input               vga_border,
+	input       [2:0]   vga_dbg_delay_chars, // DEBUG dial: pixel/DE delay in characters
+	input       [2:0]   vga_dbg_delay_dots   // DEBUG dial: extra pixel/DE delay in dots
 );
 
 //------------------------------------------------------------------------------ io
@@ -1728,14 +1730,16 @@ end
 // picture sits where a monitor expects it: 16/18 dots (8/9-dot characters),
 // doubled when the dot clock is divided (EGA-style modes). Sync is untouched
 // and pixels stay aligned to DE, so the scaler path does not move.
-localparam VID_DELAY_MAX = 36;
-wire [5:0] vid_delay = (seq_8dot_char ? 6'd16 : 6'd18) << seq_dotclock_divided;
-reg [24:0] vid_dly [0:VID_DELAY_MAX-1];
-integer vid_i;
+// DEBUG build: the delay is dialed from the OSD (characters + dots), applied
+// live, so the right value per mode can be found on a CRT. Delay line is a
+// 256-entry RAM addressed by a free-running dot counter.
+wire [7:0] vid_delay = ({5'd0, vga_dbg_delay_chars} * (seq_8dot_char ? 8'd8 : 8'd9) + {5'd0, vga_dbg_delay_dots}) << seq_dotclock_divided;
+reg [24:0] vid_dly [0:255];
+reg  [7:0] vid_wr;
 always @(posedge clk_vga) if (ce_video) begin
-	vid_dly[0] <= {vga_r_pre, vga_g_pre, vga_b_pre, vga_blank_n_pre};
-	for (vid_i = 1; vid_i < VID_DELAY_MAX; vid_i = vid_i + 1) vid_dly[vid_i] <= vid_dly[vid_i-1];
-	{vga_r, vga_g, vga_b, vga_blank_n} <= vid_dly[vid_delay-1'd1];
+	vid_dly[vid_wr] <= {vga_r_pre, vga_g_pre, vga_b_pre, vga_blank_n_pre};
+	vid_wr <= vid_wr + 1'd1;
+	{vga_r, vga_g, vga_b, vga_blank_n} <= vid_dly[vid_wr - vid_delay - 1'd1]; // dial 0 = 1 dot (never read the entry being written)
 end
 
 //------------------------------------------------------------------------------

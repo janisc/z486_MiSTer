@@ -127,6 +127,8 @@ localparam CONF_STR = {
 	"P1OMN,Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
 	"P1O3,VGA Output,Scaler,Native 31kHz;",
 	"P1O4,VSync,60Hz,Variable;",
+	"P1O[28:26],DEBUG H delay chars,0,1,2,3,4,5,6,7;",
+	"P1O[31:29],DEBUG H delay dots,0,1,2,3,4,5,6,7;",
 	"P1O5,16/24bit mode,BGR,RGB;",
 	"P1O6,16bit format,1555,565;",
 	"P1oM,Border,Yes,No;",
@@ -718,6 +720,8 @@ system #(
 	.video_b             (core_b),
 	.video_f60           (video_f60),
 	.video_border        (~status[54]),  // OSD "Border" (oM), shown by default
+	.video_dbg_delay_chars (status[28:26]),
+	.video_dbg_delay_dots  (status[31:29]),
 
 	// SVGA framebuffer descriptor (vga.v) -> MiSTer HPS framebuffer (below)
 	.video_start_addr    (vga_start_addr),
