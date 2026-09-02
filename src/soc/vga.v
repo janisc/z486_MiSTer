@@ -83,9 +83,7 @@ module vga
 	output      [1:0]   vga_write_mode,
 
 	input               vga_lores,
-	input               vga_border,
-	input       [2:0]   vga_dbg_delay_chars, // DEBUG dial: pixel/DE delay in characters
-	input       [2:0]   vga_dbg_delay_dots   // DEBUG dial: extra pixel/DE delay in dots
+	input               vga_border
 );
 
 //------------------------------------------------------------------------------ io
@@ -1721,25 +1719,24 @@ always @(posedge clk_vga) if (ce_video) begin
 	vga_b_pre <= (seq_screen_disable || vgareg_blank) ? 8'd0 : { dac_color[5:0],   dac_color[5:4]   };
 end
 
-// A real VGA card has roughly a two-character pipeline between the CRTC and
-// the DAC that the sync signals do not pass through, so its pixels come out
-// two characters after the raw CRTC timing (640x480: 32 dots of CRTC back
-// porch + 16 = the standard 48). This block was tuned for the scaler, where
-// only pixel/DE alignment matters, and emits pixels with the same latency as
-// the sync. Delay pixels and DE together by two characters so the analog
-// picture sits where a monitor expects it: 16/18 dots (8/9-dot characters),
-// doubled when the dot clock is divided (EGA-style modes). Sync is untouched
-// and pixels stay aligned to DE, so the scaler path does not move.
-// DEBUG build: the delay is dialed from the OSD (characters + dots), applied
-// live, so the right value per mode can be found on a CRT. Delay line is a
-// 256-entry RAM addressed by a free-running dot counter.
-wire [7:0] vid_delay = ({5'd0, vga_dbg_delay_chars} * (seq_8dot_char ? 8'd8 : 8'd9) + {5'd0, vga_dbg_delay_dots}) << seq_dotclock_divided;
+// A real VGA card has a pipeline between the CRTC and the DAC that the sync
+// signals do not pass through, so its pixels come out later than the raw CRTC
+// timing: two 8-dot characters in graphics modes (640x480: 32 dots of CRTC
+// back porch + 16 = the standard 48) and three 9-dot characters in text mode
+// (720x400: 27 + 27 = the standard 54). Both put the picture 5.7 us after the
+// hsync leading edge, so one monitor preset fits every DOS mode. This block
+// was tuned for the scaler, where only pixel/DE alignment matters, and emits
+// pixels with the same latency as the sync. Delay pixels and DE together by
+// that amount (doubled when the dot clock is divided, EGA-style modes). Sync
+// is untouched and pixels stay aligned to DE, so the scaler path does not
+// move. The delay line is a small RAM addressed by a free-running dot counter.
+wire [7:0] vid_delay = (seq_8dot_char ? 8'd16 : 8'd27) << seq_dotclock_divided;
 reg [24:0] vid_dly [0:255];
 reg  [7:0] vid_wr;
 always @(posedge clk_vga) if (ce_video) begin
 	vid_dly[vid_wr] <= {vga_r_pre, vga_g_pre, vga_b_pre, vga_blank_n_pre};
 	vid_wr <= vid_wr + 1'd1;
-	{vga_r, vga_g, vga_b, vga_blank_n} <= vid_dly[vid_wr - vid_delay - 1'd1]; // dial 0 = 1 dot (never read the entry being written)
+	{vga_r, vga_g, vga_b, vga_blank_n} <= vid_dly[vid_wr - vid_delay];
 end
 
 //------------------------------------------------------------------------------

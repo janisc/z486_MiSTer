@@ -126,12 +126,10 @@ localparam CONF_STR = {
 	"P1-;",
 	"P1OMN,Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
 	"P1O3,VGA Output,Scaler,Native 31kHz;",
-	"P1O4,VSync,60Hz,Variable;",
-	"P1O[28:26],DEBUG H delay chars,0,1,2,3,4,5,6,7;",
-	"P1O[31:29],DEBUG H delay dots,0,1,2,3,4,5,6,7;",
+	"H2P1O4,VSync,60Hz,Variable;",
 	"P1O5,16/24bit mode,BGR,RGB;",
 	"P1O6,16bit format,1555,565;",
-	"P1oM,Border,Yes,No;",
+	"H2P1oM,Border,Yes,No;",
 	"P1-;",
 	"P1oP,FM mode,OPL3,OPL2 compatibility;",
 	"P1OIJ,PC Speaker Volume,1,2,3,4;",
@@ -194,6 +192,7 @@ wire        reset_req = buttons[1] | status[0];
 reg  [2:0]  reset_sync_r = 3'b111;
 
 wire [127:0] status;
+wire         vga_native = status[3]; // OSD "VGA Output": 1 = native 31 kHz raster on the analog port
 wire  [1:0] cpu_speed_osd = {status[9] ^ status[8], status[8]};
 wire  [1:0] buttons;
 wire [10:0] ps2_key;
@@ -285,7 +284,7 @@ wire [12:0] arx;
 wire [12:0] ary;
 wire        mt32_available;
 wire        mt32_newmode;
-wire [15:0] status_menumask = {14'd0, mt32_newmode, mt32_available};
+wire [15:0] status_menumask = {13'd0, vga_native, mt32_newmode, mt32_available}; // bit 2 hides scaler-only video options
 wire [127:0] status_in = 128'd0;
 wire        status_set = 1'b0;
 wire        info_req;
@@ -719,9 +718,7 @@ system #(
 	.video_g             (core_g),
 	.video_b             (core_b),
 	.video_f60           (video_f60),
-	.video_border        (~status[54]),  // OSD "Border" (oM), shown by default
-	.video_dbg_delay_chars (status[28:26]),
-	.video_dbg_delay_dots  (status[31:29]),
+	.video_border        (~status[54] | vga_native),  // OSD "Border" (oM); native output always shows the real overscan
 
 	// SVGA framebuffer descriptor (vga.v) -> MiSTer HPS framebuffer (below)
 	.video_start_addr    (vga_start_addr),
@@ -1051,7 +1048,6 @@ reg         fb_force_60;
 // Framebuffer (SVGA) modes have no real-time raster, so they always use the scaler,
 // and the 60 Hz pixel-clock retiming is disabled in native mode: the resulting
 // 26.9 kHz line rate is below the range of any VGA monitor.
-wire        vga_native = status[3];
 assign VGA_SCALER = vga_native ? fb_en : 1'b1;
 assign video_f60  = vga_native ? fb_en : (~status[4] | fb_force_60);
 // Native mode: give the CRT the real VGA sync polarity (400-line modes are H-/V+,
@@ -1083,7 +1079,6 @@ assign FB_PAL_DOUT   = {vga_pal_d[17:12], vga_pal_d[17:16], vga_pal_d[11:6], vga
 assign FB_PAL_WR     = vga_pal_we;
 `endif
 `else
-wire vga_native = status[3];
 assign VGA_SCALER = ~vga_native;
 assign video_f60  = ~status[4] & ~vga_native;
 assign VGA_HS_POS = vga_native & ~core_hs_neg;

@@ -38,10 +38,14 @@ the files as follows:
   clocks, i.e. 31.5 kHz lines at 70 Hz (mode 13h, text) or 60 Hz (640x480).
   This is the signal a PC CRT monitor expects. 15 kHz TVs cannot sync to it.
   SVGA modes rendered through the MiSTer framebuffer have no real-time raster
-  and fall back to the scaler automatically. The 60 Hz VSync option is ignored
-  in this mode because its 26.9 kHz line rate is below the range of VGA
-  monitors. Sync polarity is always negative on both lines (a framework
-  property), which multisync monitors accept.
+  and fall back to the scaler automatically. In this mode the `VSync` and
+  `Border` options are hidden: the raster always runs at its native refresh
+  (the 60 Hz retiming would give a 26.9 kHz line rate, below the range of VGA
+  monitors) and the real overscan border is always shown. The sync polarity
+  follows the VGA Misc Output register like a real card (400-line modes H-/V+,
+  350-line H+/V-, 480-line H-/V-), and the picture is placed after hsync where
+  a real card puts it, so one monitor preset fits every DOS mode. Set
+  `composite_sync=0` in MiSTer.ini for a PC monitor (separate H/V sync).
 
 Development and compatibility discussion is available in the
 [MiSTer FPGA forum thread](https://misterfpga.org/viewtopic.php?t=10667).
