@@ -551,14 +551,27 @@ always @(posedge clk_vga) clk_rate <= clock_rate_vga;
 reg ce_video;
 reg [27:0] pixclk;
 reg [27:0] ce_video_sum;
+// The dot clock is a fractional divider of clk_vga, so a few pixels per line are
+// one clk_vga cycle longer than the rest. Left free-running, the position of
+// those long pixels drifts from line to line (28.322 MHz on an 85 MHz clock: one
+// long pixel per ~833 dots, walking ~67 dots per line), which the analog output
+// shows as a slow horizontal wobble. Restarting the accumulator at every hsync
+// gives every line the identical cycle pattern instead. Only done when the
+// 60 Hz retiming is off, since that mode tunes the average rate per frame.
+reg hs_line_lock;
 always @(posedge clk_vga) begin
 	if(~vga_rst_n) begin
 		ce_video_sum <= 28'd0;
 		ce_video <= 1'b0;
+		hs_line_lock <= 1'b0;
 	end
 	else begin
 		ce_video <= 1'b0;
-		if(ce_video_sum + pixclk >= clk_rate) begin
+		hs_line_lock <= vga_horiz_sync;
+		if(~vga_f60 && (vga_horiz_sync ^ hs_line_lock)) begin
+			ce_video_sum <= 28'd0;
+		end
+		else if(ce_video_sum + pixclk >= clk_rate) begin
 			ce_video_sum <= ce_video_sum + pixclk - clk_rate;
 			ce_video <= 1'b1;
 		end
