@@ -1695,30 +1695,16 @@ always @(posedge clk_vga) if (ce_video) vgareg_blank <= vgaprep_blank; // blanki
 
 reg vgareg_blank_n;
 always @(posedge clk_vga) if (ce_video) vgareg_blank_n <= ~(vgaprep_blank_no_wraparound || (hide_overscan && vgaprep_not_displaying)); // omit blanking wraparound to show top blanking as active display
-always @(posedge clk_vga) if (ce_video) vga_blank_n <= vgareg_blank_n;
+reg vga_blank_n_pre;
+always @(posedge clk_vga) if (ce_video) vga_blank_n_pre <= vgareg_blank_n;
 
 reg vgareg_horiz_sync;
 always @(posedge clk_vga) if (ce_video) vgareg_horiz_sync <= (vgaprep_horiz_sync && crtc_timing_enable)? ~(general_hsync) : general_hsync;
 reg vgareg_vert_sync;
 always @(posedge clk_vga) if (ce_video) vgareg_vert_sync <= (vgaprep_vert_sync && crtc_timing_enable)? ~(general_vsync) : general_vsync;
 
-// A real VGA card has roughly a two-character pipeline between the CRTC and
-// the DAC that the sync signals do not pass through, so the picture lands
-// two characters after the raw CRTC timing (640x480: 32 dots of CRTC back
-// porch + 16 = the standard 48). This block was tuned for the scaler, where
-// the sync position is irrelevant, and emits sync and pixels with the same
-// latency. Delay the sync outputs by two characters so the analog picture
-// sits where a monitor expects it: 16/18 dots (8/9-dot chars), doubled when
-// the dot clock is divided (EGA-style modes). DE and pixels are untouched.
-localparam SYNC_DELAY_MAX = 36;
-wire [5:0] sync_delay = (seq_8dot_char ? 6'd16 : 6'd18) << seq_dotclock_divided;
-reg [SYNC_DELAY_MAX-1:0] hs_dly, vs_dly;
-always @(posedge clk_vga) if (ce_video) begin
-	hs_dly <= {hs_dly[SYNC_DELAY_MAX-2:0], vgareg_horiz_sync};
-	vs_dly <= {vs_dly[SYNC_DELAY_MAX-2:0], vgareg_vert_sync};
-	vga_horiz_sync <= hs_dly[sync_delay-1'd1];
-	vga_vert_sync  <= vs_dly[sync_delay-1'd1];
-end
+always @(posedge clk_vga) if (ce_video) vga_horiz_sync <= vgareg_horiz_sync;
+always @(posedge clk_vga) if (ce_video) vga_vert_sync  <= vgareg_vert_sync;
 
 
 // Real sync polarity as programmed by the BIOS (used by the analog output; the
@@ -1726,10 +1712,30 @@ end
 assign vga_hsync_neg = general_hsync;
 assign vga_vsync_neg = general_vsync;
 
+reg [7:0] vga_r_pre, vga_g_pre, vga_b_pre;
 always @(posedge clk_vga) if (ce_video) begin
-	vga_r <= (seq_screen_disable || vgareg_blank) ? 8'd0 : { dac_color[17:12], dac_color[17:16] };
-	vga_g <= (seq_screen_disable || vgareg_blank) ? 8'd0 : { dac_color[11:6],  dac_color[11:10] };
-	vga_b <= (seq_screen_disable || vgareg_blank) ? 8'd0 : { dac_color[5:0],   dac_color[5:4]   };
+	vga_r_pre <= (seq_screen_disable || vgareg_blank) ? 8'd0 : { dac_color[17:12], dac_color[17:16] };
+	vga_g_pre <= (seq_screen_disable || vgareg_blank) ? 8'd0 : { dac_color[11:6],  dac_color[11:10] };
+	vga_b_pre <= (seq_screen_disable || vgareg_blank) ? 8'd0 : { dac_color[5:0],   dac_color[5:4]   };
+end
+
+// A real VGA card has roughly a two-character pipeline between the CRTC and
+// the DAC that the sync signals do not pass through, so its pixels come out
+// two characters after the raw CRTC timing (640x480: 32 dots of CRTC back
+// porch + 16 = the standard 48). This block was tuned for the scaler, where
+// only pixel/DE alignment matters, and emits pixels with the same latency as
+// the sync. Delay pixels and DE together by two characters so the analog
+// picture sits where a monitor expects it: 16/18 dots (8/9-dot characters),
+// doubled when the dot clock is divided (EGA-style modes). Sync is untouched
+// and pixels stay aligned to DE, so the scaler path does not move.
+localparam VID_DELAY_MAX = 36;
+wire [5:0] vid_delay = (seq_8dot_char ? 6'd16 : 6'd18) << seq_dotclock_divided;
+reg [24:0] vid_dly [0:VID_DELAY_MAX-1];
+integer vid_i;
+always @(posedge clk_vga) if (ce_video) begin
+	vid_dly[0] <= {vga_r_pre, vga_g_pre, vga_b_pre, vga_blank_n_pre};
+	for (vid_i = 1; vid_i < VID_DELAY_MAX; vid_i = vid_i + 1) vid_dly[vid_i] <= vid_dly[vid_i-1];
+	{vga_r, vga_g, vga_b, vga_blank_n} <= vid_dly[vid_delay-1'd1];
 end
 
 //------------------------------------------------------------------------------
