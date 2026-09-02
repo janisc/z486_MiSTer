@@ -15,3 +15,9 @@ set_false_path -from [get_registers {*boot_done*}]
 # cones across most sweep seeds.  Cut it so STA ranks on real datapaths.
 set_false_path -through [get_nets {*seg_unit|Add0*}] \
                -through [get_nets {*early_rd_present*}]
+
+# The VGA block, video pipeline and CLK_VIDEO run on the video PLL (rtl/pll_video.v),
+# reconfigured at run time between 56.64375 MHz (analyzed, the faster case) and
+# 50.35 MHz. Crossings to/from clk_sys are dual-clock RAMs, synchronizers or
+# quasi-static configuration, so they are cut here.
+set_clock_groups -asynchronous -group [get_clocks {*pll_video*}]

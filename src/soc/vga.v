@@ -55,6 +55,7 @@ module vga
 	//vga
 	output              vga_ce,
 	input               vga_f60,
+	output reg          vga_clk_sel,    // 0: 25.175 MHz dot-clock family, 1: 28.322 MHz family (clk_vga mux select)
 	output      [2:0]   vga_memmode,
 	output reg          vga_blank_n,
 	output reg          vga_off,
@@ -517,13 +518,15 @@ end
 //------------------------------------------------------------------------------ interrupt
 
 wire dot_memory_load_vertical_blank_start;
+wire vga_vert_blank_level;          // clk_vga vertical-blank level, registered in clk_vga (for the IRQ synchronizer)
 
 reg interrupt = 0;
 always @(posedge clk_sys) begin
-	reg old_r1, old_r2;
+	reg old_r0, old_r1, old_r2;
 	if(~rst_n) interrupt <=0;
 	else begin
-		old_r1 <= dot_memory_load_vertical_blank_start;
+		old_r0 <= vga_vert_blank_level;   // clk_vga -> clk_sys: two synchronizer stages, then edge detect
+		old_r1 <= old_r0;
 		old_r2 <= old_r1;
 		if(~crtc_enable_vert_int) begin
 			if(~old_r2 & old_r1) interrupt <=1;
@@ -584,6 +587,12 @@ always @(posedge clk_vga) begin
 end
 
 wire [4:0] clock_select = {crtc_reg31[7:6],crtc_reg34[1],general_clock_select};
+
+// clk_vga is a PLL output switched at the top level between 50.35 MHz
+// (2 x 25.175) and 56.64375 MHz (2 x 28.322). The ET4000 32.5/35.9 MHz clocks
+// are derived fractionally from the 56.64375 MHz clock. Registered in clk_sys:
+// it is a quasi-static mode-set signal driving the PLL reconfiguration.
+always @(posedge clk_sys) vga_clk_sel <= |clock_select[3:0];
 reg [27:0] pixclk_orig;
 reg [31:0] pixcnt;
 reg [31:0] pix60;
@@ -591,7 +600,7 @@ reg        old_sync;
 always @(posedge clk_vga) begin
 	case(clock_select[3:0])
 		0 : pixclk_orig <= 28'd25175000;
-		1 : pixclk_orig <= 28'd28322000;
+		1 : pixclk_orig <= 28'd28321875; // = 56.64375 MHz / 2, exact on the video PLL
 		2 : pixclk_orig <= 28'd32514000;
 		default : pixclk_orig <= 28'd35900000;
 	endcase
@@ -838,6 +847,8 @@ end
 
 wire host_io_vertical_retrace;
 wire host_io_not_displaying;
+wire host_io_vertical_retrace_sys; // clk_sys-synchronized copies for the port 3DA read
+wire host_io_not_displaying_sys;
 
 wire [7:0] host_io_read_wire = 
 	(host_io_ignored)                                            ? 8'hFF :
@@ -847,7 +858,7 @@ wire [7:0] host_io_read_wire =
 	// 3-phase toggle detector (c000:630B) polls IS1 bit1; with bit1 wired zero
 	// its timeout costs ~+18M sim of boot.  Real-era software never reads bit1
 	// (EGA light-pen strobe).  ao486's vga.v has the same zero-wired bit.
-	((io_b_read_valid || io_d_read_valid) && io_address == 4'hA) ? { ~host_io_vertical_retrace, 3'b0, host_io_vertical_retrace, 1'b0, host_io_not_displaying, host_io_not_displaying } : //input status 1
+	((io_b_read_valid || io_d_read_valid) && io_address == 4'hA) ? { ~host_io_vertical_retrace_sys, 3'b0, host_io_vertical_retrace_sys, 1'b0, host_io_not_displaying_sys, host_io_not_displaying_sys } : //input status 1
 	((io_b_read_valid || io_d_read_valid) && io_address == 4'h8) ? { dmc_bit_7_key, herc_2nd_page_enabled, dmc_bit_5_key, 5'b00000} : // display mode control
 	(io_c_read_valid && io_address == 4'h0)                      ? { 2'b0, attrib_pas, attrib_io_index } : //attrib read index (regardless the flip-flop state)
 	(io_c_read_valid && io_address == 4'h1)                      ? host_io_read_attrib : //attrib read data
@@ -1675,6 +1686,24 @@ end
 assign host_io_not_displaying   = vgaprep_not_displaying || vgaprep_blank; // 0=active_display, 1=(overscan||blank||sync)
 // Input Status 1 Register - bit 3
 assign host_io_vertical_retrace = vgaprep_vert_sync;
+reg vga_vert_blank_level_r;
+always @(posedge clk_vga) vga_vert_blank_level_r <= vgaprep_vert_blank;
+assign vga_vert_blank_level     = vga_vert_blank_level_r;
+
+// clk_vga -> clk_sys: Input Status 1 bits polled by software. Register the
+// combinational bits in the video domain first, then two flops in clk_sys.
+reg       stat_vr_vga, stat_nd_vga;
+always @(posedge clk_vga) begin
+	stat_vr_vga <= host_io_vertical_retrace;
+	stat_nd_vga <= host_io_not_displaying;
+end
+reg [1:0] stat_vr_sync, stat_nd_sync;
+always @(posedge clk_sys) begin
+	stat_vr_sync <= {stat_vr_sync[0], stat_vr_vga};
+	stat_nd_sync <= {stat_nd_sync[0], stat_nd_vga};
+end
+assign host_io_vertical_retrace_sys = stat_vr_sync[1];
+assign host_io_not_displaying_sys   = stat_nd_sync[1];
 
 reg vgaprep_vert_blank_last;
 always @(posedge clk_vga) if (ce_video) vgaprep_vert_blank_last <= vgaprep_vert_blank;

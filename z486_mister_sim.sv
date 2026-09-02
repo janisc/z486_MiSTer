@@ -328,6 +328,8 @@ system #(
 	.hps_apply_reset     (status[0]),
 	.software_reset      (software_reset),
 	.clock_rate          (CLOCK_RATE_HZ),
+	.clk_vga             (clk_sys),
+	.clock_rate_vga      (CLOCK_RATE_HZ),
 
 	.fdd_request         (fdd_request),
 	.ide0_request        (ide0_request),
@@ -435,6 +437,7 @@ system #(
 	.video_g             (video_g_w),
 	.video_b             (video_b_w),
 	.video_f60           (~status[4]),
+	.video_clk_sel       (),
 	.video_border        (~status[54]),
 	.video_start_addr    (fb_start_addr),
 	.video_width         (fb_width),

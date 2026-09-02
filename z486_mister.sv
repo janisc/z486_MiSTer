@@ -186,6 +186,10 @@ localparam CONF_STR = {
 wire        clk_sys;
 wire        clk_sdram;
 wire        pll_locked;
+wire        clk_vga;          // VGA dot-clock domain: 56.64375 MHz (2 x 28.322) or 50.35 MHz (2 x 25.175)
+wire        pll_video_locked;
+wire        core_vga_clk_sel; // 1 = 28.322 MHz family, 0 = 25.175 MHz family
+wire [27:0] vga_clock_rate = core_vga_clk_sel ? 28'd56_643_750 : 28'd50_350_000;
 wire        reset_async = RESET | ~pll_locked;
 wire        core_soft_reset_req;
 wire        reset_req = buttons[1] | status[0];
@@ -462,6 +466,76 @@ pll pll
 	.locked   (pll_locked)
 );
 
+// Real VGA dot clock (see rtl/pll_video.v). The VGA block, the video pipeline
+// and CLK_VIDEO run on clk_vga, a direct PLL output (the framework's clock
+// select blocks require that). The VGA clock-select bits switch the PLL's C0
+// output divider between /8 (28.322 MHz family) and /9 (25.175 MHz family)
+// through the reconfiguration port, so the pixel enable is an exact /2.
+wire [63:0] vpll_reconfig_to, vpll_reconfig_from;
+wire        vpll_cfg_waitrequest;
+reg         vpll_cfg_write = 0;
+reg   [5:0] vpll_cfg_address = 0;
+reg  [31:0] vpll_cfg_data = 0;
+
+pll_video pll_video
+(
+	.refclk            (CLK_50M),
+	.rst               (1'b0),
+	.outclk_0          (clk_vga),
+	.outclk_1          (),
+	.locked            (pll_video_locked),
+	.reconfig_to_pll   (vpll_reconfig_to),
+	.reconfig_from_pll (vpll_reconfig_from)
+);
+
+pll_cfg vpll_cfg
+(
+	.mgmt_clk          (CLK_50M),
+	.mgmt_reset        (1'b0),
+	.mgmt_waitrequest  (vpll_cfg_waitrequest),
+	.mgmt_read         (1'b0),
+	.mgmt_readdata     (),
+	.mgmt_write        (vpll_cfg_write),
+	.mgmt_address      (vpll_cfg_address),
+	.mgmt_writedata    (vpll_cfg_data),
+	.reconfig_to_pll   (vpll_reconfig_to),
+	.reconfig_from_pll (vpll_reconfig_from)
+);
+
+// Programs N (bypass), M = 18.126, and C0 = 8 or 9, then starts the
+// reconfiguration: once after the PLL first locks, and on every change of
+// the clock family. Register formats per the Altera PLL reconfiguration IP:
+// counters = {odd[17], bypass[16], high[15:8], low[7:0]}, C also has the
+// counter number in [22:18]; address 7 = 32-bit fractional part of M.
+always @(posedge CLK_50M) begin
+	reg       sel_s1 = 1, sel_s2 = 1, sel_cur = 1;
+	reg       init_done = 0;
+	reg [3:0] state = 0;
+
+	sel_s1 <= core_vga_clk_sel;
+	sel_s2 <= sel_s1;
+	vpll_cfg_write <= 0;
+
+	if(!state && pll_video_locked && (!init_done || sel_s2 != sel_cur)) begin
+		sel_cur   <= sel_s2;
+		init_done <= 1;
+		state     <= 1;
+	end
+
+	if(state && !vpll_cfg_waitrequest) begin
+		state <= state + 1'd1;
+		case(state)
+			 1: begin vpll_cfg_address <= 6'd0; vpll_cfg_data <= 32'd0;                                     vpll_cfg_write <= 1; end // waitrequest mode
+			 3: begin vpll_cfg_address <= 6'd3; vpll_cfg_data <= 32'h0001_0000;                             vpll_cfg_write <= 1; end // N: bypass (/1)
+			 5: begin vpll_cfg_address <= 6'd4; vpll_cfg_data <= 32'h0000_0909;                             vpll_cfg_write <= 1; end // M: 18 (9+9)
+			 7: begin vpll_cfg_address <= 6'd7; vpll_cfg_data <= 32'd541165879;                               vpll_cfg_write <= 1; end // M fraction: 0.126
+			 9: begin vpll_cfg_address <= 6'd5; vpll_cfg_data <= sel_cur ? 32'h0000_0404 : 32'h0002_0504; vpll_cfg_write <= 1; end // C0: /8 (4+4) or /9 (odd, 5+4)
+			11: begin vpll_cfg_address <= 6'd2; vpll_cfg_data <= 32'd0;                                     vpll_cfg_write <= 1; end // start
+			13: state <= 0;
+		endcase
+	end
+end
+
 always @(posedge clk_sys or posedge reset_async) begin
 	if (reset_async)
 		reset_sync_r <= 3'b111;
@@ -596,6 +670,8 @@ system #(
 	.hps_apply_reset     (status[0]),
 	.software_reset      (core_soft_reset_req),
 	.clock_rate          (CLOCK_RATE_HZ),
+	.clk_vga             (clk_vga),
+	.clock_rate_vga      (vga_clock_rate),
 
 	.fdd_request         (mgmt_req[7:6]),
 	.ide0_request        (mgmt_req[2:0]),
@@ -717,6 +793,7 @@ system #(
 	.video_g             (core_g),
 	.video_b             (core_b),
 	.video_f60           (video_f60),
+	.video_clk_sel       (core_vga_clk_sel),
 	.video_border        (~status[54]),  // OSD "Border" (oM), shown by default
 
 	// SVGA framebuffer descriptor (vga.v) -> MiSTer HPS framebuffer (below)
@@ -947,7 +1024,7 @@ defparam debug_uart_tx_i.uart_freq = 115200;
 // it to sys_top. Do the same here instead of feeding raw sync/DE directly.
 video_cleaner video_cleaner
 (
-	.clk_vid            (clk_sys),
+	.clk_vid            (clk_vga),
 	.ce_pix             (core_ce_pixel),
 
 	.R                  (core_r),
@@ -968,7 +1045,7 @@ video_cleaner video_cleaner
 
 gamma_fast gamma
 (
-	.clk_vid            (clk_sys),
+	.clk_vid            (clk_vga),
 	.ce_pix             (core_ce_pixel),
 
 	.gamma_bus          (gamma_bus),
@@ -995,7 +1072,7 @@ end
 
 video_freak video_freak
 (
-	.CLK_VIDEO          (clk_sys),
+	.CLK_VIDEO          (clk_vga),
 	.CE_PIXEL           (core_ce_pixel),
 	.VGA_VS             (gamma_vs),
 	.HDMI_WIDTH         (HDMI_WIDTH),
@@ -1011,7 +1088,7 @@ video_freak video_freak
 	.SCALE              (3'd0)
 );
 
-assign CLK_VIDEO     = clk_sys;
+assign CLK_VIDEO     = clk_vga;
 assign CE_PIXEL      = core_ce_pixel;
 assign VIDEO_ARX     = arx;
 assign VIDEO_ARY     = ary;
@@ -1130,7 +1207,7 @@ wire        mt32_mute = mt32_available & mt32_disable;
 mt32pi mt32pi_inst
 (
 	.CLK_AUDIO       (CLK_AUDIO),
-	.CLK_VIDEO       (clk_sys),
+	.CLK_VIDEO       (clk_vga),
 	.CE_PIXEL        (core_ce_pixel),
 	.VGA_VS          (gamma_vs),
 	.VGA_DE          (gamma_de),

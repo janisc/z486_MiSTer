@@ -5,6 +5,8 @@ module system (
     input         hps_apply_reset,
     output        software_reset,    // keyboard controller 0xFE reset command
 	input  [27:0] clock_rate,
+	input         clk_vga,          // VGA dot-clock domain (2x dot clock, PLL switched at the top level)
+	input  [27:0] clock_rate_vga,   // current clk_vga frequency in Hz
 
 	output [1:0]  fdd_request,
 	output [2:0]  ide0_request,
@@ -138,6 +140,7 @@ module system (
 	output wire [7:0]  video_g,
 	output wire [7:0]  video_b,
 	input              video_f60,     // force VGA timing to 60 Hz; 0 preserves native refresh
+	output wire        video_clk_sel, // clk_vga mux select: 0 = 25.175 MHz family, 1 = 28.322 MHz family
 	input              video_border,	// show VGA overscan border (OSD)
 
 	// SVGA framebuffer descriptor (from vga.v) -> MiSTer HPS framebuffer path
@@ -1190,8 +1193,8 @@ vga vga_inst
 (
 	.clk_sys           (clk_sys),
 	.rst_n             (~rst[9]),
-	.clk_vga           (clk_sys),
-	.clock_rate_vga    (clock_rate),
+	.clk_vga           (clk_vga),
+	.clock_rate_vga    (clock_rate_vga),
 
 	.io_address        (iobus_address[3:0]),
 	.io_read           (iobus_read),
@@ -1219,6 +1222,7 @@ vga vga_inst
 	.vga_g             (video_g),
 	.vga_b             (video_b),
 	.vga_f60           (video_f60),
+	.vga_clk_sel       (video_clk_sel),
 	.vga_memmode       (vga_memmode),
 	.vga_pal_a         (video_pal_a),
 	.vga_pal_d         (video_pal_d),
