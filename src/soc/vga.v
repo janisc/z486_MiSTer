@@ -570,7 +570,9 @@ always @(posedge clk_vga) begin
 	else begin
 		ce_video <= 1'b0;
 		hs_line_lock <= vga_horiz_sync;
-		if(~vga_f60 && (vga_horiz_sync ^ hs_line_lock)) begin
+		// Reset on the sync start edge only (active level = ~general_hsync): with the
+		// two-character sync delay the sync end can fall inside the visible line.
+		if(~vga_f60 && (vga_horiz_sync ^ hs_line_lock) && (vga_horiz_sync == ~general_hsync)) begin
 			ce_video_sum <= 28'd0;
 		end
 		else if(ce_video_sum + pixclk >= clk_rate) begin
@@ -1697,11 +1699,27 @@ always @(posedge clk_vga) if (ce_video) vga_blank_n <= vgareg_blank_n;
 
 reg vgareg_horiz_sync;
 always @(posedge clk_vga) if (ce_video) vgareg_horiz_sync <= (vgaprep_horiz_sync && crtc_timing_enable)? ~(general_hsync) : general_hsync;
-always @(posedge clk_vga) if (ce_video) vga_horiz_sync <= vgareg_horiz_sync;
-
 reg vgareg_vert_sync;
 always @(posedge clk_vga) if (ce_video) vgareg_vert_sync <= (vgaprep_vert_sync && crtc_timing_enable)? ~(general_vsync) : general_vsync;
-always @(posedge clk_vga) if (ce_video) vga_vert_sync <= vgareg_vert_sync;
+
+// A real VGA card has roughly a two-character pipeline between the CRTC and
+// the DAC that the sync signals do not pass through, so the picture lands
+// two characters after the raw CRTC timing (640x480: 32 dots of CRTC back
+// porch + 16 = the standard 48). This block was tuned for the scaler, where
+// the sync position is irrelevant, and emits sync and pixels with the same
+// latency. Delay the sync outputs by two characters so the analog picture
+// sits where a monitor expects it: 16/18 dots (8/9-dot chars), doubled when
+// the dot clock is divided (EGA-style modes). DE and pixels are untouched.
+localparam SYNC_DELAY_MAX = 36;
+wire [5:0] sync_delay = (seq_8dot_char ? 6'd16 : 6'd18) << seq_dotclock_divided;
+reg [SYNC_DELAY_MAX-1:0] hs_dly, vs_dly;
+always @(posedge clk_vga) if (ce_video) begin
+	hs_dly <= {hs_dly[SYNC_DELAY_MAX-2:0], vgareg_horiz_sync};
+	vs_dly <= {vs_dly[SYNC_DELAY_MAX-2:0], vgareg_vert_sync};
+	vga_horiz_sync <= hs_dly[sync_delay-1'd1];
+	vga_vert_sync  <= vs_dly[sync_delay-1'd1];
+end
+
 
 // Real sync polarity as programmed by the BIOS (used by the analog output; the
 // sync signals themselves get polarity-normalized by the MiSTer framework).
