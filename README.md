@@ -66,5 +66,9 @@ the files as follows:
   a real card puts it, so one monitor preset fits every DOS mode. Set
   `composite_sync=0` in MiSTer.ini for a PC monitor (separate H/V sync).
 
+Independently of the output option, the emulated card now identifies itself
+to chip detectors as an ET4000AX (port 3CB is not readable), so SciTech
+UniVBE / Display Doctor 5.3a and later install and provide VBE 2.0 (banked).
+
 Development and compatibility discussion is available in the
 [MiSTer FPGA forum thread](https://misterfpga.org/viewtopic.php?t=10667).
