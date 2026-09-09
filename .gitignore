@@ -28,3 +28,7 @@ synthesis/
 /rtl/pll.v
 /rtl/pll/pll_0002.v
 /tests/obj_dir/
+
+# archived test builds (see builds/BUILDS.md)
+!/builds/**/*.rbf
+!/builds/**/*.rpt
