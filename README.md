@@ -6,7 +6,8 @@ the core's own raster instead of the HDMI scaler: 31.5 kHz lines at the mode's
 real refresh rate (70 Hz for text and mode 13h, 60 Hz for 640x480), the real dot
 clocks, the sync polarity a VGA card uses, and the picture placed after hsync
 where a real card puts it, so one monitor adjustment fits every DOS mode.
-SVGA modes rendered through the MiSTer framebuffer are not covered.
+The 256-colour SVGA framebuffer modes (640x480x256) are rendered natively as
+well; hi-colour framebuffer modes still fall back to the scaler.
 
 The changes are on branch `native-vga`; `main` tracks upstream. Experiments,
 including a parked real dot-clock PLL, are on `exp/*` branches. The rbf files
@@ -55,8 +56,8 @@ the files as follows:
 - `Native 31kHz`: the core's own VGA raster with the real 25.175/28.322 MHz dot
   clocks, i.e. 31.5 kHz lines at 70 Hz (mode 13h, text) or 60 Hz (640x480).
   This is the signal a PC CRT monitor expects. 15 kHz TVs cannot sync to it.
-  SVGA modes rendered through the MiSTer framebuffer have no real-time raster
-  and fall back to the scaler automatically. In this mode the `VSync` and
+  The 8bpp SVGA framebuffer modes are fetched from the framebuffer line by line
+  and shown natively; other framebuffer depths fall back to the scaler. In this mode the `VSync` and
   `Border` options are hidden: the raster always runs at its native refresh
   (the 60 Hz retiming would give a 26.9 kHz line rate, below the range of VGA
   monitors) and the real overscan border is always shown. The sync polarity

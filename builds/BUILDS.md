@@ -19,7 +19,8 @@ alphabetical wins): `z486nv_<date>` = releases, picked up by the Z486 MGLs;
 
 | Folder / rbf | Commit | Contents | Status |
 |---|---|---|---|
-| `z486nv_20260902b` | `ad14180` (tag `z486nv_20260902b`) | RELEASE: everything below except the PLL. Native output, hsync line lock, real sync polarity, fixed pixel delay (2 chars in 8-dot modes, 3 chars in text), VSync/Border hidden + border forced on in native mode, README. | built 2026-09-02, on the card as the current release |
+| `z486nv_20260909` | `eaf14c2`+ (tag `z486nv_20260909`) | RELEASE 3: release 2 + native output of the 8bpp SVGA framebuffer modes (svga_linebuf, DDR3 arbiter) + About-screen build date `nv-yymmdd`. | built 2026-09-09, on the card as the current release |
+| `z486nv_20260902b` (now `_Z486_tests/z486x_release2_20260902b.rbf`) | `ad14180` (tag `z486nv_20260902b`) | RELEASE: everything below except the PLL. Native output, hsync line lock, real sync polarity, fixed pixel delay (2 chars in 8-dot modes, 3 chars in text), VSync/Border hidden + border forced on in native mode, README. | built 2026-09-02, superseded by z486nv_20260909 |
 | `z486nv_20260902_pol` (was `z486nv_20260902.rbf`, now `_Z486_tests/z486x_release1_pol_20260902.rbf`) | `dae4506` (tag `z486nv_20260902`) | Native output + line lock + real sync polarity. Same bits as `z486x_pol_20260902`. | tested OK: monitor shows no polarity flag, DOS modes get their own preset; picture ~2 chars left of a real card |
 | `z486x_nopol_20260902` | `a017d8e` | Native output + hsync line lock, polarity still N/N. | tested OK: wobble gone, "looks exactly like DOS on this monitor" |
 
@@ -34,7 +35,7 @@ alphabetical wins): `z486nv_<date>` = releases, picked up by the Z486 MGLs;
 | `z486x_vdelay_20260902` | `exp/sync-delay` `f4f75fc` | Pixels + DE delayed by 2 chars instead (sync untouched). | tested: better; text mode still short by ~1 char (needs 3), Keen OK; Keen's cyan overscan border darkened by the clamp = real-hardware quirk of mode 0Dh |
 | `z486x_dials_20260902` | `exp/sync-delay` `c1ce4e8` | Same + live OSD dials "DEBUG H delay chars/dots". | used to measure: monitor centre wants ~7.0 us sync-edge-to-picture, standard (VESA/real card) is 5.7 us; front porch limits the delay to 5/4/3 chars before the right edge enters the sync |
 | `z486x_svga_20260909` | `exp/native-svga` `c399904` | Native output of the 8bpp SVGA framebuffer modes (640x480x256 etc.): svga_linebuf fetches each scanline from the DDR3 framebuffer a line ahead and injects it at the DAC index; DDR3 port arbitrated with main_memory. On top of the release. | tested: black on CRT and HDMI, OSD alive = CPU stalled (arbiter deadlock) |
-| `z486x_svga_20260909b` | `exp/native-svga` `65a62b4` | Same + DDR3 arbiter deadlock fix (first build stalled the CPU on its first framebuffer write: black on CRT and HDMI). Also placed temporarily as `_Computer/z486nv_20260909.rbf` so the Z486 MGLs launch it during testing. | test pending |
+| `z486x_svga_20260909b` | `exp/native-svga` `65a62b4` | Same + DDR3 arbiter deadlock fix (first build stalled the CPU on its first framebuffer write: black on CRT and HDMI). | tested OK: SimCity 2000 and Panzer General 640x480x256 native on the CRT, no defects; promoted to release 3 |
 
 ## Facts learned
 
