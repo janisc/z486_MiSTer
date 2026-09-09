@@ -436,6 +436,7 @@ system #(
 	.video_b             (video_b_w),
 	.video_f60           (~status[4]),
 	.video_border        (~status[54]),
+	.video_fb_native     (1'b0),
 	.video_start_addr    (fb_start_addr),
 	.video_width         (fb_width),
 	.video_height        (fb_height),

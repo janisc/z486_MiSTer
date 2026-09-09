@@ -31,5 +31,6 @@ set_global_assignment -name VERILOG_FILE src/soc/pit_counter.v
 set_global_assignment -name VERILOG_FILE src/soc/ps2.v
 set_global_assignment -name VERILOG_FILE src/soc/rtc.v
 set_global_assignment -name VERILOG_FILE src/soc/vga.v
+set_global_assignment -name SYSTEMVERILOG_FILE src/soc/svga_linebuf.sv
 set_global_assignment -name QIP_FILE src/soc/sound/sound.qip
 set_global_assignment -name VERILOG_FILE src/soc/joystick.v

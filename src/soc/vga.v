@@ -83,7 +83,15 @@ module vga
 	output      [1:0]   vga_write_mode,
 
 	input               vga_lores,
-	input               vga_border
+	input               vga_border,
+
+	// native SVGA (8bpp framebuffer) support: raster-stage timing out, fetched pixel in
+	output              vga_lf_ce,          // dot clock enable
+	output              vga_lf_nd,          // 1 outside the display window (same stage as the DAC index mux)
+	output              vga_lf_vsync,       // vertical sync, active high
+	output              vga_lf_doublescan,
+	input               fb_native,          // 1: take the DAC index from fb_pixel inside the display window
+	input       [7:0]   fb_pixel
 );
 
 //------------------------------------------------------------------------------ io
@@ -1415,8 +1423,12 @@ wire [7:0] pel_color_index =
 
 wire [7:0] pel_dac_index = 
 	(vgaprep_not_displaying) ? attrib_color_overscan :
+	(fb_native)              ? fb_pixel : // native SVGA: pixel fetched from the DDR3 framebuffer (svga_linebuf)
 	(~attrib_pas)            ? 8'h00 : // 0 according to Intel documentation, attrib_color_overscan according to ET4000 documentation?
 	                           pel_color_index;
+
+assign vga_lf_ce         = ce_video;
+assign vga_lf_nd         = vgaprep_not_displaying;
 
 //------------------------------------------------------------------------------ dac
 
@@ -1792,5 +1804,9 @@ always @(posedge clk_sys) begin
 end
 
 //------------------------------------------------------------------------------
+
+// native SVGA line fetcher: raster-stage signals declared above
+assign vga_lf_vsync      = vgaprep_vert_sync;
+assign vga_lf_doublescan = vertical_doublescan;
 
 endmodule

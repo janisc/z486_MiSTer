@@ -139,6 +139,7 @@ module system (
 	output wire [7:0]  video_b,
 	input              video_f60,     // force VGA timing to 60 Hz; 0 preserves native refresh
 	input              video_border,	// show VGA overscan border (OSD)
+	input              video_fb_native,	// native analog output of the 8bpp framebuffer modes
 
 	// SVGA framebuffer descriptor (from vga.v) -> MiSTer HPS framebuffer path
 	output wire [19:0] video_start_addr,
@@ -614,9 +615,9 @@ main_memory main_memory (
 	.fb_ddram_we          (fb_ddram_we),
 	.fb_ddram_rd          (fb_ddram_rd),
 	.fb_ddram_dout        (ddram_dout),
-	.fb_ddram_dout_ready  (ddram_dout_ready),
+	.fb_ddram_dout_ready  (ddram_dout_ready & ~lf_owner),
 	.fb_ddram_burstcnt    (fb_ddram_burstcnt),
-	.fb_ddram_busy        (ddram_busy)
+	.fb_ddram_busy        (mm_busy_in)
 );
 
 // CPU → SDRAM port 0: main_memory holds signals stable until accepted
@@ -949,14 +950,54 @@ assign dbg_sd_avm_wait      = boot_done ? 1'b0 : (sd_avm_write && !mm_ready);
 assign dbg_sd_avm_accept    = sd_avm_write && !dbg_sd_avm_wait;
 assign ioctl_wait           = 1'b0;
 
-// ddram is time-shared: boot loader reads the RAM image (pre-boot), then the SVGA
-// framebuffer owns it for writes (post-boot). boot_done is the arbiter (mutually exclusive).
-assign ddram_burstcnt       = boot_done ? fb_ddram_burstcnt : 8'd1;
-assign ddram_addr           = boot_done ? fb_ddram_addr     : {4'h3, boot_ddr_byte_addr[27:3]};
-assign ddram_rd             = boot_done ? fb_ddram_rd        : ddram_rd_r;
+// ddram is time-shared: boot loader reads the RAM image (pre-boot); post-boot the
+// SVGA framebuffer port of main_memory (CPU reads/writes, single words) and the
+// native-output line fetcher (read bursts) share it. main_memory has priority;
+// the fetcher takes the bus only when main_memory has nothing in flight and
+// holds it for a whole burst, during which main_memory sees busy.
+wire        lf_ce, lf_nd, lf_vsync, lf_doublescan;
+wire  [7:0] lf_pixel;
+wire [28:0] lf_ddram_addr;
+wire        lf_ddram_rd;
+wire  [7:0] lf_ddram_burstcnt;
+wire        lf_owner;
+reg         mm_rd_pending;   // main_memory read accepted, data not yet returned
+wire        mm_busy_in = ddram_busy | lf_owner;
+wire        mm_active  = fb_ddram_we | fb_ddram_rd | mm_rd_pending;
+always @(posedge clk_sys) begin
+	if (reset) mm_rd_pending <= 0;
+	else if (fb_ddram_rd & ~mm_busy_in) mm_rd_pending <= 1;
+	else if (ddram_dout_ready & ~lf_owner) mm_rd_pending <= 0;
+end
+
+svga_linebuf svga_linebuf
+(
+	.clk            (clk_sys),
+	.reset          (reset | ~boot_done),
+	.enable         (video_fb_native),
+	.ce_pix         (lf_ce),
+	.not_displaying (lf_nd),
+	.vsync          (lf_vsync),
+	.doublescan     (lf_doublescan),
+	.start_addr     (video_start_addr),
+	.stride_words   (video_stride),
+	.width_words    (video_width),
+	.pixel          (lf_pixel),
+	.ddr_addr       (lf_ddram_addr),
+	.ddr_rd         (lf_ddram_rd),
+	.ddr_burstcnt   (lf_ddram_burstcnt),
+	.ddr_dout       (ddram_dout),
+	.ddr_dout_ready (ddram_dout_ready & lf_owner),
+	.ddr_busy       (ddram_busy | mm_active),
+	.owner          (lf_owner)
+);
+
+assign ddram_burstcnt       = boot_done ? (lf_owner ? lf_ddram_burstcnt : fb_ddram_burstcnt) : 8'd1;
+assign ddram_addr           = boot_done ? (lf_owner ? lf_ddram_addr     : fb_ddram_addr)     : {4'h3, boot_ddr_byte_addr[27:3]};
+assign ddram_rd             = boot_done ? (lf_owner ? lf_ddram_rd       : fb_ddram_rd)       : ddram_rd_r;
 assign ddram_din            = boot_done ? fb_ddram_din      : 64'd0;
 assign ddram_be             = boot_done ? fb_ddram_be       : 8'hFF;
-assign ddram_we             = boot_done ? fb_ddram_we       : 1'b0;
+assign ddram_we             = boot_done ? (~lf_owner & fb_ddram_we) : 1'b0;
 
 assign dbg_mm_addr          = mm_addr;
 assign dbg_mm_din           = mm_din;
@@ -1236,7 +1277,13 @@ vga vga_inst
 	.vga_stride        (video_stride),
 	.vga_off           (video_off),
 	.vga_lores         (1'b0),
-	.vga_border        (video_border)
+	.vga_border        (video_border),
+	.vga_lf_ce         (lf_ce),
+	.vga_lf_nd         (lf_nd),
+	.vga_lf_vsync      (lf_vsync),
+	.vga_lf_doublescan (lf_doublescan),
+	.fb_native         (video_fb_native),
+	.fb_pixel          (lf_pixel)
 );
 
 
