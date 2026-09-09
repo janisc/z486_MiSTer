@@ -634,7 +634,11 @@ reg [5:0] seg_rd, seg_wr;
 always @(posedge clk_sys) begin
 	if(~rst_n) {seg_rd, seg_wr} <= 0;
 	else if(io_c_write && io_address == 'hD) {seg_rd[3:0], seg_wr[3:0]} <= io_writedata;
-	else if(io_c_write && io_address == 'hB) {seg_rd[5:4], seg_wr[5:4]} <= {io_writedata[5:4],io_writedata[1:0]};
+	// Port 3CB (segment bits 5:4, ET4000/W32 only) is not implemented: reads return FF
+	// (ET4000AX identification) and writes are ignored. Honouring writes while reads
+	// return FF let any read-modify-write of 3CB (the VGA BIOS does one on mode set)
+	// move the CPU read window 3 MB up, so VRAM read back zeros in the SVGA modes.
+	// Bits 5:4 are unused anyway with 1 MB of video memory.
 end
 
 //------------------------------------------------------------------------------ graphics controller io
