@@ -236,11 +236,15 @@ always @(posedge clk) begin
                     state <= IDLE;
                     vga_busy <= 0;
                 end
-            FB_READ:
-                if (!fb_ddram_busy) begin   // issue the read (1-cycle pulse)
-                    fb_ddram_rd <= 1;
+            FB_READ: begin
+                // hold the read request until the DDR3 port accepts it (the port is
+                // shared with the native-output line fetcher, which can mask it)
+                fb_ddram_rd <= 1;
+                if (fb_ddram_rd && !fb_ddram_busy) begin
+                    fb_ddram_rd <= 0;
                     state <= FB_READ_WAIT;
                 end
+            end
             FB_READ_WAIT:
                 if (fb_ddram_dout_ready) begin
                     if (!vga_chain4) begin

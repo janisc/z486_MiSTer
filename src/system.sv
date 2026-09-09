@@ -966,7 +966,7 @@ wire        mm_busy_in = ddram_busy | lf_owner;
 wire        mm_active  = fb_ddram_we | fb_ddram_rd | mm_rd_pending;
 always @(posedge clk_sys) begin
 	if (reset) mm_rd_pending <= 0;
-	else if (fb_ddram_rd & ~mm_busy_in) mm_rd_pending <= 1;
+	else if (fb_ddram_rd & ~lf_owner & ~ddram_busy) mm_rd_pending <= 1;   // read really reached the DDR
 	else if (ddram_dout_ready & ~lf_owner) mm_rd_pending <= 0;
 end
 
@@ -988,7 +988,9 @@ svga_linebuf svga_linebuf
 	.ddr_burstcnt   (lf_ddram_burstcnt),
 	.ddr_dout       (ddram_dout),
 	.ddr_dout_ready (ddram_dout_ready & lf_owner),
-	.ddr_busy       (ddram_busy | mm_active),
+	// wait for main_memory only before taking the bus; once the fetcher owns it,
+	// main_memory holds its request (masked below) until the burst is done
+	.ddr_busy       (ddram_busy | (mm_active & ~lf_owner)),
 	.owner          (lf_owner)
 );
 
