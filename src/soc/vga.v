@@ -867,7 +867,14 @@ wire [7:0] host_io_read_wire =
 	(io_c_read_valid && io_address == 4'h7)                      ? { 6'd0, dac_is_read? 2'b11 : 2'b00 } : //dac state
 	(io_c_read_valid && io_address == 4'h8)                      ? dac_write_index :
 	(io_c_read_valid && io_address == 4'h9)                      ? dac_reg9 :
-	(io_c_read_valid && io_address == 4'hB)                      ? { 2'b00, seg_rd[5:4], 2'b00, seg_wr[5:4] } :
+	// Port 3CB (bank bits 4-5) exists only on the ET4000/W32 family. Chip detectors
+	// (SciTech UniVBE, svgalib, VGAKIT) write to it and read it back to tell W32
+	// variants from the ET4000AX, then read the W32 revision at port 217B, which
+	// this core does not have, and end up at a chip they cannot drive (SciTech
+	// 5.3a: "ET6000, not supported"). Reading FF here identifies the card as an
+	// ET4000AX, which is what the emulated register set actually is. Writes still
+	// land in seg_rd/seg_wr[5:4] (unused with 1 MB of video memory).
+	(io_c_read_valid && io_address == 4'hB)                      ? 8'hFF :
 	(io_c_read_valid && io_address == 4'hD)                      ? { seg_rd[3:0], seg_wr[3:0] } :
 	(io_c_read_valid && io_address == 4'hE)                      ? { 4'd0, graph_io_index } :
 	(io_c_read_valid && io_address == 4'hF)                      ? host_io_read_graph :
