@@ -67,7 +67,7 @@ the files as follows:
   `composite_sync=0` in MiSTer.ini for a PC monitor (separate H/V sync).
 
 Independently of the output option, the emulated card now identifies itself
-to chip detectors as an ET4000AX (port 3CB is not readable), so SciTech
+to chip detectors as an ET4000AX (port 3CB reads FF and writes to it are ignored), so SciTech
 UniVBE / Display Doctor 5.3a and later install and provide VBE 2.0 (banked).
 
 Development and compatibility discussion is available in the
