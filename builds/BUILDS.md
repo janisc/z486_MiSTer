@@ -36,6 +36,7 @@ alphabetical wins): `z486nv_<date>` = releases, picked up by the Z486 MGLs;
 | `z486x_dials_20260902` | `exp/sync-delay` `c1ce4e8` | Same + live OSD dials "DEBUG H delay chars/dots". | used to measure: monitor centre wants ~7.0 us sync-edge-to-picture, standard (VESA/real card) is 5.7 us; front porch limits the delay to 5/4/3 chars before the right edge enters the sync |
 | `z486x_svga_20260909` | `exp/native-svga` `c399904` | Native output of the 8bpp SVGA framebuffer modes (640x480x256 etc.): svga_linebuf fetches each scanline from the DDR3 framebuffer a line ahead and injects it at the DAC index; DDR3 port arbitrated with main_memory. On top of the release. | tested: black on CRT and HDMI, OSD alive = CPU stalled (arbiter deadlock) |
 | `z486x_svga_20260909b` | `exp/native-svga` `65a62b4` | Same + DDR3 arbiter deadlock fix (first build stalled the CPU on its first framebuffer write: black on CRT and HDMI). | tested OK: SimCity 2000 and Panzer General 640x480x256 native on the CRT, no defects; promoted to release 3 |
+| `z486x_et4k_20260909` | `exp/et4000-id` `d0242ae` | Release 3 + port 3CB reads FF so chip detectors (SciTech UniVBE/SDD, svgalib, VGAKIT) identify the card as an ET4000AX instead of falling through to "ET6000, not supported". | tested OK: UniVBE 5.3a and 6.7 now install (ET4000, 1 MB, VBE 2.0 banked); Steel Panthers still black (dynamic difference after mode set, unresolved) |
 
 ## Facts learned
 
