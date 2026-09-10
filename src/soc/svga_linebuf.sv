@@ -11,9 +11,8 @@
 // Timing contract (all in the VGA clock, which is clk_sys):
 //  - ce_pix / not_displaying / vsync come from the same pipeline stage as the
 //    DAC index mux in vga.v, so counting displayed dots here aligns with it.
-//  - In the 16bpp modes the CRTC is programmed in bytes (two dots per pixel,
-//    1280 dots for 640 pixels) and vga.v doubles the dot rate; each pixel is
-//    held for two dots and `pix_first` marks the first dot of every pixel.
+//  - In the 16bpp modes the CRTC still counts one dot per pixel (640 dots for
+//    640 pixels) but each pixel is two bytes: a line is twice as many words.
 //  - At the end of each displayed line n the line for raster line n+2 is
 //    fetched into the buffer half that line n just used; line n+1 is already in
 //    the other half. Lines 0 and 1 are fetched at vsync. A fetch has a full
@@ -39,8 +38,7 @@ module svga_linebuf
 	input       [8:0] width_words,     // displayed width in 64-bit words (8 bytes each)
 
 	output      [7:0] pixel,           // 8bpp: DAC index of the dot being displayed
-	output reg [23:0] rgb,             // 16bpp: colour of the dot being displayed
-	output reg        pix_first,       // 16bpp: this dot is the first of its pixel (pixel clock enable)
+	output     [23:0] rgb,             // 16bpp: colour of the dot being displayed
 
 	// DDR3 read master (64-bit words, address in words)
 	output reg [28:0] ddr_addr,
@@ -71,7 +69,7 @@ reg [10:0] x_cnt;       // dot index within the display window
 reg        y_par;       // buffer half of the line being displayed
 reg  [9:0] vis_line;    // index of the raster line being displayed
 reg  [2:0] byte_sel;    // 8bpp: byte of the buffer word for the current dot
-reg  [1:0] hw_sel;      // 16bpp: half-word of the buffer word for the pixel being looked up
+reg  [1:0] hw_sel;      // 16bpp: half-word of the buffer word for the current dot
 reg        nd_d, vs_d;
 wire [10:0] x_next = not_displaying ? 11'd0 : x_cnt + 1'd1;
 
@@ -86,18 +84,11 @@ wire       vs_start = vsync & ~vs_d;
 wire       line_end = ce_pix & not_displaying & ~nd_d;   // display window just closed
 wire [9:0] line_n2  = vis_line + 2'd2;
 
-// 16bpp pixel lookahead: pixel p is addressed at the first dot of pixel p-1 (or
-// continuously during blanking for pixel 0), so its RAM word is ready well before
-// it is latched at the first dot of pixel p. Dots can be a single clock apart at
-// the doubled dot rate, pixels never are.
-wire [10:0] px_next  = x_next[10:1] + 1'd1;               // pixel after the one starting at x_next
-wire        px_start = not_displaying | ~x_next[0];       // the dot starting now is a pixel start
-
 always @(posedge clk) begin
 	if (reset | ~enable) begin
 		x_cnt <= 0; y_par <= 0; vis_line <= 0; nd_d <= 1; vs_d <= 0;
 		req_valid <= 0; req_line1 <= 0; req_line <= 0; req_buf <= 0;
-		lb_rd_addr <= 0; byte_sel <= 0; hw_sel <= 0; rgb <= 0; pix_first <= 1;
+		lb_rd_addr <= 0; byte_sel <= 0; hw_sel <= 0;
 	end
 	else begin
 		vs_d <= vsync;
@@ -120,17 +111,10 @@ always @(posedge clk) begin
 			nd_d       <= not_displaying;
 			x_cnt      <= x_next;
 			if (bpp16) begin
-				// pixel clock enable: first dot of each pixel; keep alternating through
-				// blanking so consecutive enables are never one clock apart
-				pix_first <= not_displaying ? ~pix_first : ~x_next[0];
-				if (px_start) begin
-					rgb        <= rgb16(lb_rd_q[hw_sel * 16 +: 16]);
-					lb_rd_addr <= not_displaying ? {y_par, 8'd0} : {y_par, px_next[9:2]};
-					hw_sel     <= not_displaying ? 2'd0 : px_next[1:0];
-				end
+				lb_rd_addr <= {y_par, x_next[9:2]};
+				hw_sel     <= x_next[1:0];
 			end
 			else begin
-				pix_first  <= 1;
 				lb_rd_addr <= {y_par, x_next[10:3]};
 				byte_sel   <= x_next[2:0];
 			end
@@ -156,10 +140,11 @@ always @(posedge clk) begin
 	end
 end
 
-// 8bpp: the pixel for dot x is byte x[2:0] of buffer word x[10:3]. Address and
-// byte select are registered at the previous dot; the RAM read lands one clock
-// later, and dots are >= 3 clocks apart.
+// The pixel for dot x is byte x[2:0] of buffer word x[10:3] (8bpp) or half-word
+// x[1:0] of word x[9:2] (16bpp). Address and select are registered at the
+// previous dot; the RAM read lands one clock later, and dots are >= 3 clocks apart.
 assign pixel = lb_rd_q[byte_sel * 8 +: 8];
+assign rgb   = rgb16(lb_rd_q[hw_sel * 16 +: 16]);
 
 // 16bpp word -> RGB888 (top bits replicated), same interpretation as the HPS scaler
 function [23:0] rgb16(input [15:0] w);
@@ -197,7 +182,7 @@ always @(posedge clk) begin
 				if (req_valid & ~req_taken & ~ddr_busy) begin
 					req_taken  <= 1;
 					cur_addr   <= FB_BASE_WORDS + {10'd0, start_addr[19:1]} + req_line * stride_words;
-					words_left <= width_words;
+					words_left <= bpp16 ? {width_words[7:0], 1'b0} : width_words;   // 16bpp: two bytes per pixel
 					lb_wr_addr <= {req_buf, 8'd0};
 					state      <= S_ISSUE;
 				end

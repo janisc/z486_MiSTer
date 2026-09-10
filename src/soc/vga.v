@@ -92,10 +92,8 @@ module vga
 	output              vga_lf_doublescan,
 	input               fb_native,          // 1: take the DAC index from fb_pixel inside the display window (8bpp)
 	input       [7:0]   fb_pixel,
-	input               fb_native16,        // 1: 16bpp framebuffer rendered natively: fb_rgb bypasses the palette,
-	                                        //    dot rate doubled (the CRTC counts bytes, two per pixel)
-	input      [23:0]   fb_rgb,
-	input               fb_pix_first        // 16bpp: this dot is the first of its pixel
+	input               fb_native16,        // 1: 16bpp framebuffer rendered natively: fb_rgb bypasses the palette
+	input      [23:0]   fb_rgb
 );
 
 //------------------------------------------------------------------------------ io
@@ -599,7 +597,6 @@ end
 
 wire [4:0] clock_select = {crtc_reg31[7:6],crtc_reg34[1],general_clock_select};
 reg [27:0] pixclk_orig;
-wire [27:0] pixclk_native = fb_native16 ? {pixclk_orig[26:0], 1'b0} : pixclk_orig;
 reg [31:0] pixcnt;
 reg [31:0] pix60;
 reg        old_sync;
@@ -614,9 +611,7 @@ end
 
 always @(posedge clk_vga) begin
 	if(~vga_rst_n || ~vga_f60) begin
-		// 16bpp modes: the CRTC is programmed in bytes and a real card feeds the
-		// HiColor DAC a doubled clock, so double the dot rate to keep the line rate
-		pixclk <= (clk_rate<pixclk_native) ? clk_rate : pixclk_native;
+		pixclk <= (clk_rate<pixclk_orig) ? clk_rate : pixclk_orig;
 		pixcnt <= 32'd0;
 		pix60 <= 32'd0;
 		old_sync <= 1'b0;
@@ -1769,7 +1764,7 @@ end
 // that amount (doubled when the dot clock is divided, EGA-style modes). Sync
 // is untouched and pixels stay aligned to DE, so the scaler path does not
 // move. The delay line is a small RAM addressed by a free-running dot counter.
-wire [7:0] vid_delay = (seq_8dot_char ? 8'd16 : 8'd27) << (seq_dotclock_divided | fb_native16);
+wire [7:0] vid_delay = (seq_8dot_char ? 8'd16 : 8'd27) << seq_dotclock_divided;
 reg [24:0] vid_dly [0:255];
 reg  [7:0] vid_wr;
 always @(posedge clk_vga) if (ce_video) begin
@@ -1802,7 +1797,6 @@ reg ce_video_reg;
 always @(posedge clk_vga) ce_video_reg <= ce_video;
 
 assign vga_ce = ce_video_reg & (
-	(fb_native16)         ? fb_pix_first :
 	(vga_flags[1:0] == 3) ? ce_div3 : 
 	                        ~vga_lores | (                                                                                     // when in vga_lores mode (not 4x mode)...
 	                                        ~(vertical_doublescan & vert_cnt[0]) &                                             // undo vertical doublescan when active (omits odd lines)

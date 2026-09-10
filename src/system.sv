@@ -960,7 +960,6 @@ assign ioctl_wait           = 1'b0;
 wire        lf_ce, lf_nd, lf_vsync, lf_doublescan;
 wire  [7:0] lf_pixel;
 wire [23:0] lf_rgb;
-wire        lf_pix_first;
 wire [28:0] lf_ddram_addr;
 wire        lf_ddram_rd;
 wire  [7:0] lf_ddram_burstcnt;
@@ -990,7 +989,6 @@ svga_linebuf svga_linebuf
 	.width_words    (video_width),
 	.pixel          (lf_pixel),
 	.rgb            (lf_rgb),
-	.pix_first      (lf_pix_first),
 	.ddr_addr       (lf_ddram_addr),
 	.ddr_rd         (lf_ddram_rd),
 	.ddr_burstcnt   (lf_ddram_burstcnt),
@@ -1295,8 +1293,7 @@ vga vga_inst
 	.fb_native         (video_fb_native),
 	.fb_pixel          (lf_pixel),
 	.fb_native16       (video_fb_native & video_fb_bpp16),
-	.fb_rgb            (lf_rgb),
-	.fb_pix_first      (lf_pix_first)
+	.fb_rgb            (lf_rgb)
 );
 
 
