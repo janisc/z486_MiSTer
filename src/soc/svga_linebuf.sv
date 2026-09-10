@@ -12,10 +12,13 @@
 // Timing contract (all in the VGA clock, which is clk_sys):
 //  - ce_pix / not_displaying / vsync come from the same pipeline stage as the
 //    DAC index mux in vga.v, so counting displayed dots here aligns with it.
-//  - In the 16bpp and 24bpp modes the CRTC still counts one dot per pixel (640
-//    dots for 640 pixels) but each pixel is two or three bytes: a line is two or
-//    three times as many words. A 24bpp pixel can straddle two buffer words, so
-//    it is read in two cycles (dots are at least three clocks apart).
+//  - In the 16bpp modes the CRTC still counts one dot per pixel (640 dots for
+//    640 pixels) but each pixel is two bytes: a line is twice as many words.
+//  - In the 24bpp mode the CRTC counts two bytes per dot as well, so a 640-pixel
+//    line is 960 dots: one and a half dots per pixel. Pixels are shown two per
+//    three dots (widths 2,1,2,1...) and `pix_ce` marks the dot a new pixel starts
+//    on. A pixel can straddle two buffer words, so it is read in two cycles (dots
+//    are at least three clocks apart).
 //  - At the end of each displayed line n the line for raster line n+2 is
 //    fetched into the buffer half that line n just used; line n+1 is already in
 //    the other half. Lines 0 and 1 are fetched at vsync. A fetch has a full
@@ -42,6 +45,7 @@ module svga_linebuf
 
 	output      [7:0] pixel,           // 8bpp: DAC index of the dot being displayed
 	output     [23:0] rgb,             // 16/24bpp: colour of the dot being displayed
+	output reg        pix_ce,          // 24bpp: a new pixel starts on this dot (pixel clock enable); else 1
 
 	// DDR3 read master (64-bit words, address in words)
 	output reg [28:0] ddr_addr,
@@ -73,6 +77,8 @@ reg        rd2_pending;   // issue the read of word+1 next cycle
 reg        rd2_capture;   // lb_rd_q holds the first word now: keep it
 reg [63:0] q0;            // first word of the pixel
 reg  [2:0] b24_sel;       // byte offset of the pixel in q0
+reg  [9:0] px24;          // 24bpp: pixel shown at the current dot
+reg  [1:0] ph24;          // 24bpp: (2 * dot) mod 3, the 2:3 pixel/dot phase
 
 //------------------------------------------------------------------------------ raster side
 reg [10:0] x_cnt;       // dot index within the display window
@@ -80,7 +86,9 @@ reg        y_par;       // buffer half of the line being displayed
 reg  [9:0] vis_line;    // index of the raster line being displayed
 reg  [2:0] byte_sel;    // 8bpp: byte of the buffer word for the current dot
 reg  [1:0] hw_sel;      // 16bpp: half-word of the buffer word for the current dot
-wire [12:0] b24_off = {x_next, 1'b0} + x_next;   // 24bpp: byte offset of the pixel at this dot (3x)
+wire        px24_adv = not_displaying | (ph24 != 2'd0);          // 24bpp: this dot starts a new pixel
+wire  [9:0] px24_new = not_displaying ? 10'd0 : px24 + 1'd1;      // (blanking prefetches pixel 0)
+wire [11:0] b24_off  = {px24_new, 1'b0} + px24_new;              // 24bpp: byte offset of that pixel (3p)
 reg        nd_d, vs_d;
 wire [10:0] x_next = not_displaying ? 11'd0 : x_cnt + 1'd1;
 
@@ -100,7 +108,7 @@ always @(posedge clk) begin
 		x_cnt <= 0; y_par <= 0; vis_line <= 0; nd_d <= 1; vs_d <= 0;
 		req_valid <= 0; req_line1 <= 0; req_line <= 0; req_buf <= 0;
 		lb_rd_addr <= 0; byte_sel <= 0; hw_sel <= 0; b24_sel <= 0;
-		rd2_pending <= 0; rd2_capture <= 0;
+		rd2_pending <= 0; rd2_capture <= 0; px24 <= 10'h3FF; ph24 <= 1; pix_ce <= 1;
 	end
 	else begin
 		vs_d <= vsync;
@@ -135,16 +143,24 @@ always @(posedge clk) begin
 					lb_rd_addr <= {y_par, x_next[10:2]};
 					hw_sel     <= x_next[1:0];
 				end
-				2'd2: begin                                   // 24bpp: word of byte 3x, then the next one
-					lb_rd_addr  <= {y_par, b24_off[11:3]};
-					b24_sel     <= b24_off[2:0];
-					rd2_pending <= 1;
+				2'd2: begin                                   // 24bpp: 2 pixels per 3 dots
+					// phase: dot d shows pixel floor(2d/3); blanking parks at "pixel -1,
+					// phase 1" so the first displayed dot advances to pixel 0
+					ph24   <= not_displaying ? 2'd1 : (ph24 == 2'd0) ? 2'd2 : ph24 - 1'd1;
+					px24   <= not_displaying ? 10'h3FF : px24_adv ? px24_new : px24;
+					pix_ce <= px24_adv;
+					if (px24_adv) begin                       // word of byte 3p, then the next one
+						lb_rd_addr  <= {y_par, b24_off[11:3]};
+						b24_sel     <= b24_off[2:0];
+						rd2_pending <= 1;
+					end
 				end
 				default: begin                                // 8bpp: 8 pixels per word
 					lb_rd_addr <= {y_par, 1'b0, x_next[10:3]};
 					byte_sel   <= x_next[2:0];
 				end
 			endcase
+			if (bpp != 2'd2) pix_ce <= 1;
 			if (line_end) begin
 				// line n done: fetch raster line n+2 into the half line n used
 				req_valid <= 1;
@@ -171,7 +187,7 @@ end
 // x[1:0] of word x[9:2] (16bpp). Address and select are registered at the
 // previous dot; the RAM read lands one clock later, and dots are >= 3 clocks apart.
 assign pixel = lb_rd_q[byte_sel * 8 +: 8];
-// 24bpp: bytes 3x..3x+2 of {word+1, word}: memory order B,G,R (VESA) when the
+// 24bpp: bytes 3p..3p+2 of {word+1, word}: memory order B,G,R (VESA) when the
 // format says BGR, R,G,B otherwise
 wire [127:0] w24 = {lb_rd_q, q0};
 wire  [23:0] p24 = w24[b24_sel * 8 +: 24];
