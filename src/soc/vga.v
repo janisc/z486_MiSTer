@@ -1511,8 +1511,11 @@ wire hbs = horiz_cnt      == crtc_horizontal_blanking_start;
 wire hbe = horiz_cnt[5:0] == crtc_horizontal_blanking_end;
 wire vbs = vert_cnt       == crtc_vertical_blanking_start;
 wire vbe = vert_cnt[7:0]  == crtc_vertical_blanking_end;
-wire hss = horiz_cnt      == crtc_horizontal_retrace_start + crtc_horizontal_retrace_skew;
-wire hse = horiz_cnt[4:0] == crtc_horizontal_retrace_end + crtc_horizontal_retrace_skew;
+reg [8:0] crtc_hrs_line;
+reg [1:0] crtc_hrskew_line;
+reg [4:0] crtc_hre_line;
+wire hss = horiz_cnt      == crtc_hrs_line + crtc_hrskew_line;
+wire hse = horiz_cnt[4:0] == crtc_hre_line + crtc_hrskew_line;
 wire vss = vert_cnt       == crtc_vertical_retrace_start;
 wire vse = vert_cnt[3:0]  == crtc_vertical_retrace_end;
 
@@ -1545,6 +1548,20 @@ always @(posedge clk_vga) if (ce_video) begin
 	end
 end
 
+// The horizontal retrace registers take effect at the next line. Demos that move
+// the sync per scanline (Copper by S!P: CRTC 04h rewritten ~2 us after blanking
+// starts, values 79..89 around the nominal 84) relied on ISA I/O being slow
+// enough that the write lands after the current line's sync pulse. Here the write
+// lands before it, and a value at or below the current position would skip this
+// line's hsync (which also clocks the scanline counter) and drop the monitor's
+// lock. Latching at the end of the line gives the real-hardware result.
+always @(posedge clk_vga) if (ce_video) begin
+	if (character_last_dot && horiz_last_cnt) begin
+		crtc_hrs_line    <= crtc_horizontal_retrace_start;
+		crtc_hrskew_line <= crtc_horizontal_retrace_skew;
+		crtc_hre_line    <= crtc_horizontal_retrace_end;
+	end
+end
 // vert_cnt (the scanline counter) is clocked by HSYNC
 always @(posedge clk_vga) if (ce_video) begin
 	if (character_last_dot && hss) begin
