@@ -599,6 +599,11 @@ end
 
 wire [4:0] clock_select = {crtc_reg31[7:6],crtc_reg34[1],general_clock_select};
 reg [27:0] pixclk_orig;
+// Native 24bpp: the BIOS mode has 960-dot lines (two bytes per dot) on the 36 MHz
+// clock, which gives a 30.6 kHz line rate, below the range of most VGA monitors.
+// Run the dot clock so the line rate is the standard 31.469 kHz instead
+// (frame 59.9 Hz): dots per line x 31469.
+wire [27:0] pixclk_n24 = {crtc_horizontal_total + 9'd5, 3'b000} * 28'd31469;
 reg [31:0] pixcnt;
 reg [31:0] pix60;
 reg        old_sync;
@@ -613,7 +618,7 @@ end
 
 always @(posedge clk_vga) begin
 	if(~vga_rst_n || ~vga_f60) begin
-		pixclk <= (clk_rate<pixclk_orig) ? clk_rate : pixclk_orig;
+		pixclk <= fb_native24 ? ((clk_rate<pixclk_n24) ? clk_rate : pixclk_n24) : (clk_rate<pixclk_orig) ? clk_rate : pixclk_orig;
 		pixcnt <= 32'd0;
 		pix60 <= 32'd0;
 		old_sync <= 1'b0;
