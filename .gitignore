@@ -32,3 +32,6 @@ synthesis/
 # archived test builds (see builds/BUILDS.md)
 !/builds/**/*.rbf
 !/builds/**/*.rpt
+
+# local notes, never committed
+IDEAS.local.md
