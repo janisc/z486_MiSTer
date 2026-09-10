@@ -127,11 +127,9 @@ localparam CONF_STR = {
 	"P1,Audio & Video;",
 	"P1-;",
 	"P1OMN,Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
-	"P1O3,VGA Output,Scaler,Native 31kHz;",
-	"H2P1O4,VSync,60Hz,Variable;",
 	"P1O5,16/24bit mode,BGR,RGB;",
 	"P1O6,16bit format,1555,565;",
-	"H2P1oM,Border,Yes,No;",
+	"P1oM,Border,Yes,No;",
 	"P1-;",
 	"P1oP,FM mode,OPL3,OPL2 compatibility;",
 	"P1OIJ,PC Speaker Volume,1,2,3,4;",
@@ -195,7 +193,12 @@ wire        reset_req = buttons[1] | status[0];
 reg  [2:0]  reset_sync_r = 3'b111;
 
 wire [127:0] status;
-wire         vga_native = status[3]; // OSD "VGA Output": 1 = native 31 kHz raster on the analog port
+// The analog port always carries the core's own VGA raster (31.5 kHz lines, real
+// refresh, real dot clocks and sync polarity), which is what a PC CRT expects.
+// MiSTer.ini still decides the exceptions at the framework level: vga_scaler=1
+// puts the HDMI scaler picture on the analog port instead, direct_video=1 sends
+// the raster to the HDMI pins for a DAC, vsync_adjust=0 keeps HDMI at 60 Hz.
+
 wire         fb_native;              // framebuffer mode rendered natively (svga_linebuf)
 wire   [1:0] fb_bpp;                 // ... at 0 = 8, 1 = 16, 2 = 24 bits per pixel
 wire  [1:0] cpu_speed_osd = {status[9] ^ status[8], status[8]};
@@ -289,7 +292,7 @@ wire [12:0] arx;
 wire [12:0] ary;
 wire        mt32_available;
 wire        mt32_newmode;
-wire [15:0] status_menumask = {13'd0, vga_native, mt32_newmode, mt32_available}; // bit 2 hides scaler-only video options
+wire [15:0] status_menumask = {14'd0, mt32_newmode, mt32_available};
 wire [127:0] status_in = 128'd0;
 wire        status_set = 1'b0;
 wire        info_req;
@@ -723,7 +726,7 @@ system #(
 	.video_g             (core_g),
 	.video_b             (core_b),
 	.video_f60           (video_f60),
-	.video_border        (~status[54] | vga_native),  // OSD "Border" (oM); native output always shows the real overscan
+	.video_border        (~status[54]),  // OSD "Border" (oM): show the overscan border (both outputs share one raster)
 	.video_fb_native     (fb_native),
 	.video_fb_bpp        (fb_bpp),
 	.video_fb_fmt16      ({~status[5], ~status[6]}),
@@ -1049,27 +1052,24 @@ reg  [11:0] fb_height;
 reg  [13:0] fb_stride;
 reg   [4:0] fb_fmt;
 reg         fb_off;
-reg         fb_force_60;
-// OSD "VGA Output": Scaler (default) copies the HDMI scaler to the analog port.
-// Native hands the core's own VGA raster (25.175/28.322 MHz dot clocks, 31.5 kHz
-// lines, 70/60 Hz frames) to the analog DAC, which is what a PC CRT expects.
-// Framebuffer (SVGA) modes have no real-time raster, so they always use the scaler,
-// and the 60 Hz pixel-clock retiming is disabled in native mode: the resulting
-// 26.9 kHz line rate is below the range of any VGA monitor.
-// All framebuffer depths (8, 16 and 24bpp) are rendered natively by svga_linebuf,
-// so in native mode the analog port never hands over to the scaler.
+// The framebuffer (SVGA) modes have no real-time raster of their own; all depths
+// (8, 16 and 24bpp) are rendered natively by svga_linebuf, so the analog port never
+// hands over to the scaler. The HDMI scaler always gets the same raster; the
+// framebuffer descriptor below is still handed to the framework for its own use.
+// The 60 Hz pixel-clock retiming the stock core offered for HDMI is gone: it would
+// give a 26.9 kHz line rate on the analog port, below the range of VGA monitors.
+// HDMI at a fixed 60 Hz is the framework's job (MiSTer.ini vsync_adjust=0).
 wire fb16        = ~vga_flags[2] && (vga_flags[1:0] == 2'd2);
 wire fb24        = ~vga_flags[2] && (vga_flags[1:0] == 2'd3);
 assign fb_bpp     = fb24 ? 2'd2 : fb16 ? 2'd1 : 2'd0;
-assign fb_native  = vga_native & fb_en;
-assign VGA_SCALER = ~vga_native;
-assign video_f60  = vga_native ? 1'b0 : (~status[4] | fb_force_60);
-// Native mode: give the CRT the real VGA sync polarity (400-line modes are H-/V+,
-// 350-line H+/V-, 480-line H-/V-). Scaler mode keeps the framework default.
-assign VGA_HS_POS = vga_native & ~core_hs_neg;
-assign VGA_VS_POS = vga_native & ~core_vs_neg;
+assign fb_native  = fb_en;
+assign VGA_SCALER = 1'b0;
+assign video_f60  = 1'b0;
+// Real VGA sync polarity on the analog port (400-line modes H-/V+, 350-line H+/V-,
+// 480-line H-/V-), so multisync monitors pick the right preset.
+assign VGA_HS_POS = ~core_hs_neg;
+assign VGA_VS_POS = ~core_vs_neg;
 always @(posedge clk_sys) begin
-	fb_force_60 <= fb_en || (fb_width > 12'd760);
 	fb_en       <= ~vga_flags[2] && |vga_flags[1:0];
 	fb_base     <= {4'h3, 6'b111110, vga_start_addr, 2'b00};
 	fb_width    <= (vga_flags[1:0] == 2'd3) ? 12'd640 : vga_flags[2] ? {vga_width, 2'b00} : {vga_width, 3'b000};
@@ -1095,10 +1095,10 @@ assign FB_PAL_WR     = vga_pal_we;
 `else
 assign fb_native  = 1'b0;
 assign fb_bpp     = 2'd0;
-assign VGA_SCALER = ~vga_native;
-assign video_f60  = ~status[4] & ~vga_native;
-assign VGA_HS_POS = vga_native & ~core_hs_neg;
-assign VGA_VS_POS = vga_native & ~core_vs_neg;
+assign VGA_SCALER = 1'b0;
+assign video_f60  = 1'b0;
+assign VGA_HS_POS = ~core_hs_neg;
+assign VGA_VS_POS = ~core_vs_neg;
 `endif
 
 assign LED_USER      = pll_locked;
