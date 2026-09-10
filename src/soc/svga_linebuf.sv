@@ -75,7 +75,9 @@ always @(posedge clk) lb_rd_q <= lb[lb_rd_addr];
 // (sequenced in the raster block below)
 reg        rd2_pending;   // issue the read of word+1 next cycle
 reg        rd2_capture;   // lb_rd_q holds the first word now: keep it
+reg        rd2_done;      // both words are in: assemble the colour
 reg [63:0] q0;            // first word of the pixel
+reg [23:0] rgb24;         // assembled 24bpp colour, stable for the whole pixel
 reg  [2:0] b24_sel;       // byte offset of the pixel in q0
 reg  [9:0] px24;          // 24bpp: pixel shown at the current dot
 reg  [1:0] ph24;          // 24bpp: (2 * dot) mod 3, the 2:3 pixel/dot phase
@@ -86,7 +88,7 @@ reg        y_par;       // buffer half of the line being displayed
 reg  [9:0] vis_line;    // index of the raster line being displayed
 reg  [2:0] byte_sel;    // 8bpp: byte of the buffer word for the current dot
 reg  [1:0] hw_sel;      // 16bpp: half-word of the buffer word for the current dot
-wire        px24_adv = not_displaying | (ph24 == 2'd0);          // 24bpp: this dot starts a new pixel
+wire        px24_adv = (ph24 == 2'd0);                            // 24bpp: this dot starts a new pixel
 wire  [9:0] px24_new = not_displaying ? 10'd0 : px24 + 1'd1;      // (blanking prefetches pixel 0)
 wire [11:0] b24_off  = {px24_new, 1'b0} + px24_new;              // 24bpp: byte offset of that pixel (3p)
 reg        nd_d, vs_d;
@@ -108,7 +110,7 @@ always @(posedge clk) begin
 		x_cnt <= 0; y_par <= 0; vis_line <= 0; nd_d <= 1; vs_d <= 0;
 		req_valid <= 0; req_line1 <= 0; req_line <= 0; req_buf <= 0;
 		lb_rd_addr <= 0; byte_sel <= 0; hw_sel <= 0; b24_sel <= 0;
-		rd2_pending <= 0; rd2_capture <= 0; px24 <= 10'h3FF; ph24 <= 0; pix_ce <= 1;
+		rd2_pending <= 0; rd2_capture <= 0; rd2_done <= 0; rgb24 <= 0; px24 <= 10'h3FF; ph24 <= 0; pix_ce <= 1;
 	end
 	else begin
 		vs_d <= vsync;
@@ -118,8 +120,12 @@ always @(posedge clk) begin
 		// first word in q0 while lb_rd_q delivers the second
 		rd2_pending <= 0;
 		rd2_capture <= rd2_pending;
+		rd2_done    <= rd2_capture;
 		if (rd2_pending) lb_rd_addr <= lb_rd_addr + 1'd1;
 		if (rd2_capture) q0 <= lb_rd_q;
+		// registered once per pixel: at the doubled/tripled dot rate the next pixel's
+		// first word can land in lb_rd_q while this pixel is still being sampled
+		if (rd2_done) rgb24 <= fmt16[1] ? {p24[23:16], p24[15:8], p24[7:0]} : {p24[7:0], p24[15:8], p24[23:16]};
 
 		// engine accepted the current request (handled first: a new request
 		// raised in the same cycle below must win)
@@ -144,11 +150,12 @@ always @(posedge clk) begin
 					hw_sel     <= x_next[1:0];
 				end
 				2'd2: begin                                   // 24bpp: 3 dots per pixel
-					// blanking parks at "pixel -1, phase 0" so the first displayed dot
-					// starts pixel 0 (already prefetched)
-					ph24   <= not_displaying ? 2'd0 : (ph24 == 2'd2) ? 2'd0 : ph24 + 1'd1;
+					// the 3-dot phase runs through blanking too (pixel clock enable every
+					// third dot for the framework); blanking parks the pixel at -1 and
+					// prefetches pixel 0 so the first displayed dot starts on pixel 0
+					ph24   <= (ph24 == 2'd2) ? 2'd0 : ph24 + 1'd1;
 					px24   <= not_displaying ? 10'h3FF : px24_adv ? px24_new : px24;
-					pix_ce <= px24_adv;
+					pix_ce <= (ph24 == 2'd0);
 					if (px24_adv) begin                       // word of byte 3p, then the next one
 						lb_rd_addr  <= {y_par, b24_off[11:3]};
 						b24_sel     <= b24_off[2:0];
@@ -191,8 +198,7 @@ assign pixel = lb_rd_q[byte_sel * 8 +: 8];
 // format says BGR, R,G,B otherwise
 wire [127:0] w24 = {lb_rd_q, q0};
 wire  [23:0] p24 = w24[b24_sel * 8 +: 24];
-assign rgb   = (bpp == 2'd2) ? (fmt16[1] ? {p24[23:16], p24[15:8], p24[7:0]} : {p24[7:0], p24[15:8], p24[23:16]})
-                             : rgb16(lb_rd_q[hw_sel * 16 +: 16]);
+assign rgb   = (bpp == 2'd2) ? rgb24 : rgb16(lb_rd_q[hw_sel * 16 +: 16]);
 
 // 16bpp word -> RGB888 (top bits replicated), same interpretation as the HPS scaler
 function [23:0] rgb16(input [15:0] w);
