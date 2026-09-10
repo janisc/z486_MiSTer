@@ -120,7 +120,9 @@ always @(posedge clk) begin
 			nd_d       <= not_displaying;
 			x_cnt      <= x_next;
 			if (bpp16) begin
-				pix_first <= px_start;
+				// pixel clock enable: first dot of each pixel; keep alternating through
+				// blanking so consecutive enables are never one clock apart
+				pix_first <= not_displaying ? ~pix_first : ~x_next[0];
 				if (px_start) begin
 					rgb        <= rgb16(lb_rd_q[hw_sel * 16 +: 16]);
 					lb_rd_addr <= not_displaying ? {y_par, 8'd0} : {y_par, px_next[9:2]};
@@ -165,8 +167,10 @@ function [23:0] rgb16(input [15:0] w);
 	begin
 		if (fmt16[0]) begin a = w[14:10]; b = {w[9:5], w[9]}; c = w[4:0]; end   // 1555
 		else          begin a = w[15:11]; b = w[10:5];        c = w[4:0]; end   // 565
-		rgb16 = fmt16[1] ? { c, c[4:2], b, b[5:4], a, a[4:2] }                  // BGR
-		                 : { a, a[4:2], b, b[5:4], c, c[4:2] };                  // RGB
+		// the scaler byte-swaps DDR3 words, so its "BGR" (FB_FORMAT[4]=1) shows the
+		// low field as red; mirror that so both outputs agree
+		rgb16 = fmt16[1] ? { a, a[4:2], b, b[5:4], c, c[4:2] }
+		                 : { c, c[4:2], b, b[5:4], a, a[4:2] };
 	end
 endfunction
 
