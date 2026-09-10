@@ -141,7 +141,7 @@ always @(posedge clk) begin
 					rd2_pending <= 1;
 				end
 				default: begin                                // 8bpp: 8 pixels per word
-					lb_rd_addr <= {y_par, x_next[10:3]};
+					lb_rd_addr <= {y_par, 1'b0, x_next[10:3]};
 					byte_sel   <= x_next[2:0];
 				end
 			endcase
