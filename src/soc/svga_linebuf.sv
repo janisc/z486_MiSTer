@@ -79,6 +79,10 @@ reg        rd2_done;      // both words are in: assemble the colour
 reg [63:0] q0;            // first word of the pixel
 reg [23:0] rgb24;         // assembled 24bpp colour, stable for the whole pixel
 reg  [2:0] b24_sel;       // byte offset of the pixel in q0
+// bytes 3p..3p+2 of {word+1, word}: memory order B,G,R (VESA) when the format
+// says BGR, R,G,B otherwise
+wire [127:0] w24 = {lb_rd_q, q0};
+wire  [23:0] p24 = w24[b24_sel * 8 +: 24];
 reg  [9:0] px24;          // 24bpp: pixel shown at the current dot
 reg  [1:0] ph24;          // 24bpp: (2 * dot) mod 3, the 2:3 pixel/dot phase
 
@@ -194,10 +198,6 @@ end
 // x[1:0] of word x[9:2] (16bpp). Address and select are registered at the
 // previous dot; the RAM read lands one clock later, and dots are >= 3 clocks apart.
 assign pixel = lb_rd_q[byte_sel * 8 +: 8];
-// 24bpp: bytes 3p..3p+2 of {word+1, word}: memory order B,G,R (VESA) when the
-// format says BGR, R,G,B otherwise
-wire [127:0] w24 = {lb_rd_q, q0};
-wire  [23:0] p24 = w24[b24_sel * 8 +: 24];
 assign rgb   = (bpp == 2'd2) ? rgb24 : rgb16(lb_rd_q[hw_sel * 16 +: 16]);
 
 // 16bpp word -> RGB888 (top bits replicated), same interpretation as the HPS scaler
