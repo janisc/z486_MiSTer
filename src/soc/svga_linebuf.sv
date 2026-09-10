@@ -14,11 +14,11 @@
 //    DAC index mux in vga.v, so counting displayed dots here aligns with it.
 //  - In the 16bpp modes the CRTC still counts one dot per pixel (640 dots for
 //    640 pixels) but each pixel is two bytes: a line is twice as many words.
-//  - In the 24bpp mode the CRTC counts two bytes per dot as well, so a 640-pixel
-//    line is 960 dots: one and a half dots per pixel. Pixels are shown two per
-//    three dots (widths 2,1,2,1...) and `pix_ce` marks the dot a new pixel starts
-//    on. A pixel can straddle two buffer words, so it is read in two cycles (dots
-//    are at least three clocks apart).
+//  - In the 24bpp mode the CRTC counts one byte per dot: a 640-pixel line is 1920
+//    dots, three per pixel (vga.v runs the dot clock at 3x so the line rate stays
+//    31.5 kHz; dots can then be a single clock apart, pixels never are). The
+//    three bytes of a pixel are read at its first dot with a two-cycle, two-word
+//    read (a pixel can straddle two buffer words); `pix_ce` marks that dot.
 //  - At the end of each displayed line n the line for raster line n+2 is
 //    fetched into the buffer half that line n just used; line n+1 is already in
 //    the other half. Lines 0 and 1 are fetched at vsync. A fetch has a full
@@ -86,7 +86,7 @@ reg        y_par;       // buffer half of the line being displayed
 reg  [9:0] vis_line;    // index of the raster line being displayed
 reg  [2:0] byte_sel;    // 8bpp: byte of the buffer word for the current dot
 reg  [1:0] hw_sel;      // 16bpp: half-word of the buffer word for the current dot
-wire        px24_adv = not_displaying | (ph24 != 2'd0);          // 24bpp: this dot starts a new pixel
+wire        px24_adv = not_displaying | (ph24 == 2'd0);          // 24bpp: this dot starts a new pixel
 wire  [9:0] px24_new = not_displaying ? 10'd0 : px24 + 1'd1;      // (blanking prefetches pixel 0)
 wire [11:0] b24_off  = {px24_new, 1'b0} + px24_new;              // 24bpp: byte offset of that pixel (3p)
 reg        nd_d, vs_d;
@@ -108,7 +108,7 @@ always @(posedge clk) begin
 		x_cnt <= 0; y_par <= 0; vis_line <= 0; nd_d <= 1; vs_d <= 0;
 		req_valid <= 0; req_line1 <= 0; req_line <= 0; req_buf <= 0;
 		lb_rd_addr <= 0; byte_sel <= 0; hw_sel <= 0; b24_sel <= 0;
-		rd2_pending <= 0; rd2_capture <= 0; px24 <= 10'h3FF; ph24 <= 1; pix_ce <= 1;
+		rd2_pending <= 0; rd2_capture <= 0; px24 <= 10'h3FF; ph24 <= 0; pix_ce <= 1;
 	end
 	else begin
 		vs_d <= vsync;
@@ -143,10 +143,10 @@ always @(posedge clk) begin
 					lb_rd_addr <= {y_par, x_next[10:2]};
 					hw_sel     <= x_next[1:0];
 				end
-				2'd2: begin                                   // 24bpp: 2 pixels per 3 dots
-					// phase: dot d shows pixel floor(2d/3); blanking parks at "pixel -1,
-					// phase 1" so the first displayed dot advances to pixel 0
-					ph24   <= not_displaying ? 2'd1 : (ph24 == 2'd0) ? 2'd2 : ph24 - 1'd1;
+				2'd2: begin                                   // 24bpp: 3 dots per pixel
+					// blanking parks at "pixel -1, phase 0" so the first displayed dot
+					// starts pixel 0 (already prefetched)
+					ph24   <= not_displaying ? 2'd0 : (ph24 == 2'd2) ? 2'd0 : ph24 + 1'd1;
 					px24   <= not_displaying ? 10'h3FF : px24_adv ? px24_new : px24;
 					pix_ce <= px24_adv;
 					if (px24_adv) begin                       // word of byte 3p, then the next one
@@ -230,8 +230,9 @@ always @(posedge clk) begin
 				if (req_valid & ~req_taken & ~ddr_busy) begin
 					req_taken  <= 1;
 					cur_addr   <= FB_BASE_WORDS + {10'd0, start_addr[19:1]} + req_line * stride_words;
-					words_left <= (bpp == 2'd2) ? ({width_words[7:0], 1'b0} + width_words) :   // 24bpp: three bytes per pixel
-					              (bpp == 2'd1) ?  {width_words[7:0], 1'b0} : width_words;        // 16bpp: two
+					// 16bpp: the CRTC counts pixels, a line is twice the words; 8/24bpp: it
+					// counts bytes, width_words is already the line length
+					words_left <= (bpp == 2'd1) ? {width_words[7:0], 1'b0} : width_words;
 					lb_wr_addr <= {req_buf, 9'd0};
 					state      <= S_ISSUE;
 				end

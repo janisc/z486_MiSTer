@@ -93,7 +93,7 @@ module vga
 	input               fb_native,          // 1: take the DAC index from fb_pixel inside the display window (8bpp)
 	input       [7:0]   fb_pixel,
 	input               fb_native16,        // 1: 16/24bpp framebuffer rendered natively: fb_rgb bypasses the palette
-	input               fb_native24,        // 1: ... and it is the 24bpp mode (2 pixels per 3 dots)
+	input               fb_native24,        // 1: ... and it is the 24bpp mode (3 dots per pixel, 3x dot clock)
 	input      [23:0]   fb_rgb,
 	input               fb_pix_ce           // native 24bpp: a new pixel starts on this dot
 );
@@ -599,10 +599,10 @@ end
 
 wire [4:0] clock_select = {crtc_reg31[7:6],crtc_reg34[1],general_clock_select};
 reg [27:0] pixclk_orig;
-// Native 24bpp: the BIOS mode has 960-dot lines (two bytes per dot) on the 36 MHz
-// clock, which gives a 30.6 kHz line rate, below the range of most VGA monitors.
-// Run the dot clock so the line rate is the standard 31.469 kHz instead
-// (frame 59.9 Hz): dots per line x 31469.
+// Native 24bpp: the BIOS mode counts one byte per dot (1920 dots per 640-pixel
+// line, 298-character total) on the 36 MHz clock, a 15 kHz line rate. A real card
+// feeds the DAC a tripled clock; run the dot clock so the line rate is the
+// standard 31.469 kHz (about 75 MHz, frame 59.9 Hz): dots per line x 31469.
 wire [27:0] pixclk_n24 = {crtc_horizontal_total + 9'd5, 3'b000} * 28'd31469;
 reg [31:0] pixcnt;
 reg [31:0] pix60;
@@ -1771,9 +1771,10 @@ end
 // that amount (doubled when the dot clock is divided, EGA-style modes). Sync
 // is untouched and pixels stay aligned to DE, so the scaler path does not
 // move. The delay line is a small RAM addressed by a free-running dot counter.
-// (native 24bpp: 18 dots, a multiple of the 3-dot pixel pattern, so the pixel
-// clock enable stays aligned with the delayed pixels)
-wire [7:0] vid_delay = fb_native24 ? 8'd18 : (seq_8dot_char ? 8'd16 : 8'd27) << seq_dotclock_divided;
+// (native 24bpp: 16 dots of 25 MHz = 48 dots at the tripled clock, less the two
+// dots the pixel assembly already adds; a multiple of 3 keeps the pixel clock
+// enable aligned with the delayed pixels)
+wire [7:0] vid_delay = fb_native24 ? 8'd45 : (seq_8dot_char ? 8'd16 : 8'd27) << seq_dotclock_divided;
 reg [24:0] vid_dly [0:255];
 reg  [7:0] vid_wr;
 always @(posedge clk_vga) if (ce_video) begin
@@ -1806,7 +1807,7 @@ reg ce_video_reg;
 always @(posedge clk_vga) ce_video_reg <= ce_video;
 
 assign vga_ce = ce_video_reg & (
-	(fb_native16)         ? fb_pix_ce : // native 16bpp: one dot per pixel; 24bpp: two pixels per three dots
+	(fb_native16)         ? fb_pix_ce : // native 16bpp: one dot per pixel; 24bpp: one per three dots
 	(vga_flags[1:0] == 3) ? ce_div3 : 
 	                        ~vga_lores | (                                                                                     // when in vga_lores mode (not 4x mode)...
 	                                        ~(vertical_doublescan & vert_cnt[0]) &                                             // undo vertical doublescan when active (omits odd lines)
