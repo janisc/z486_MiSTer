@@ -15,6 +15,18 @@ Naming rule (MiSTer main matches an MGL `<rbf>` as prefix + `_` or `.`, newest
 alphabetical wins): `z486nv_<date>` = releases, picked up by the Z486 MGLs;
 `z486x_<tag>_<date>` = experiments, never matched; `z486_<date>` = stock.
 
+
+Resource cost of the fork (production profile, Quartus 17.1, same seed), measured
+against a stock build of upstream `6075a33` on 2026-09-11:
+
+| | stock | fork (`z486x_native_20260911`) | delta |
+|---|---|---|---|
+| Logic (ALMs) | 38,066 (91 %) | 39,298 (94 %) | +1,232 (+3 % of the device) |
+| Registers | 31,565 | 33,314 | +1,749 |
+| Block RAM (M10K) | 464 (84 %) | 478 (86 %) | +14 (line buffer 2 x 512 x 64, pixel delay line) |
+| DSP blocks | 35 | 39 | +4 (24bpp dot-clock multiply, hi-colour unpacking) |
+| clk_sys setup slack | -6.24 ns | -6.49 ns | fitter noise; CPU paths in both |
+
 ## Release line (branch `native-vga`)
 
 | Folder / rbf | Commit | Contents | Status |
@@ -32,6 +44,7 @@ alphabetical wins): `z486nv_<date>` = releases, picked up by the Z486 MGLs;
 
 | Folder / rbf | Branch / commit | Contents | Status |
 |---|---|---|---|
+| `z486x_native_20260911` | `exp/always-native` `a9fcd38` | Release 7 + the analog port is always native: OSD `VGA Output` and `VSync` removed, no scaler request, no 60 Hz retiming; Border stays (applies to both outputs); MiSTer.ini `vga_scaler` / `vsync_adjust` / `direct_video` cover the exceptions (README). Release 8 candidate, on the card as `z486nv_20260911.rbf`. | harness regressions pass; CRT / DAC direct video / 15 kHz ini to be tested |
 | `z486x_latch_20260910` | `exp/crtc-line-latch` `a85a231` | 24bpp build + CRTC horizontal retrace start/end/skew latched at the end of each line (writes take effect next line, as on real ISA timing). | tested: harness regressions pass; Copper wobble on the CRT much better, some dark flashing top/bottom in the helicopter part remains |
 | `z486x_24bpp_20260910` | `exp/native-24bpp` | Native 24bpp framebuffer output (four builds: 1 dot/px guess, 2:3 mapping guess, 3 dots/px at 3x clock with a per-clock pixel mix, then colour registered per pixel). | tested OK with DISP24 on the native path |
 | `z486x_hicolor_20260910` | `exp/native-hicolor` `e9a92d3` | Native 16bpp framebuffer output (first two builds of the branch doubled the dot clock after a DOSBox BIOS mode set; the Windows Tseng driver actually keeps 640 dots per line, two bytes each). | tested OK: Indiana Jones Desktop Adventures (Win 3.1, ET4000 640x480 32K colours) on CRT and HDMI, Steel Panthers 8bpp unchanged |
