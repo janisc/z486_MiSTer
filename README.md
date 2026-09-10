@@ -7,8 +7,8 @@ the core's own raster instead of the HDMI scaler: 31.5 kHz lines at the mode's
 real refresh rate (70 Hz for text and mode 13h, 60 Hz for 640x480), the real dot
 clocks, the sync polarity a VGA card uses, and the picture placed after hsync
 where a real card puts it, so one monitor adjustment fits every DOS mode.
-The 256-colour SVGA framebuffer modes (640x480x256) are rendered natively as
-well; hi-colour framebuffer modes still fall back to the scaler.
+The 256-colour and hi-colour (15/16-bit) SVGA framebuffer modes are rendered
+natively as well; the 24-bit framebuffer mode still falls back to the scaler.
 
 The changes are on branch `native-vga`; `main` tracks upstream. Experiments,
 including a parked real dot-clock PLL, are on `exp/*` branches. The rbf files
