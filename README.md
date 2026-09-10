@@ -57,7 +57,7 @@ the files as follows:
 - `Native 31kHz`: the core's own VGA raster with the real 25.175/28.322 MHz dot
   clocks, i.e. 31.5 kHz lines at 70 Hz (mode 13h, text) or 60 Hz (640x480).
   This is the signal a PC CRT monitor expects. 15 kHz TVs cannot sync to it.
-  The 8bpp SVGA framebuffer modes are fetched from the framebuffer line by line
+  The 8bpp and 16bpp SVGA framebuffer modes are fetched from the framebuffer line by line
   and shown natively; other framebuffer depths fall back to the scaler. In this mode the `VSync` and
   `Border` options are hidden: the raster always runs at its native refresh
   (the 60 Hz retiming would give a 26.9 kHz line rate, below the range of VGA
