@@ -6,13 +6,16 @@
 // module reads each scanline from DDR3 ahead of time into a double line buffer
 // and presents the pixel for the dot being displayed: in the 8bpp modes the DAC
 // index, which vga.v runs through the palette; in the 16bpp (15/16-bit
-// hi-colour) modes the RGB value itself, which vga.v routes past the palette.
+// hi-colour) and 24bpp modes the RGB value itself, which vga.v routes past the
+// palette.
 //
 // Timing contract (all in the VGA clock, which is clk_sys):
 //  - ce_pix / not_displaying / vsync come from the same pipeline stage as the
 //    DAC index mux in vga.v, so counting displayed dots here aligns with it.
-//  - In the 16bpp modes the CRTC still counts one dot per pixel (640 dots for
-//    640 pixels) but each pixel is two bytes: a line is twice as many words.
+//  - In the 16bpp and 24bpp modes the CRTC still counts one dot per pixel (640
+//    dots for 640 pixels) but each pixel is two or three bytes: a line is two or
+//    three times as many words. A 24bpp pixel can straddle two buffer words, so
+//    it is read in two cycles (dots are at least three clocks apart).
 //  - At the end of each displayed line n the line for raster line n+2 is
 //    fetched into the buffer half that line n just used; line n+1 is already in
 //    the other half. Lines 0 and 1 are fetched at vsync. A fetch has a full
@@ -25,7 +28,7 @@ module svga_linebuf
 	input             clk,
 	input             reset,
 	input             enable,          // framebuffer mode with native output selected
-	input             bpp16,           // 1: 16 bits per pixel, else 8
+	input       [1:0] bpp,             // 0: 8 bits per pixel, 1: 16, 2: 24
 	input       [1:0] fmt16,           // [1] 1=BGR byte order, [0] 1=1555 else 565 (matches FB_FORMAT[4:3])
 
 	// raster timing from vga.v
@@ -38,7 +41,7 @@ module svga_linebuf
 	input       [8:0] width_words,     // displayed width in 64-bit words (8 bytes each)
 
 	output      [7:0] pixel,           // 8bpp: DAC index of the dot being displayed
-	output     [23:0] rgb,             // 16bpp: colour of the dot being displayed
+	output     [23:0] rgb,             // 16/24bpp: colour of the dot being displayed
 
 	// DDR3 read master (64-bit words, address in words)
 	output reg [28:0] ddr_addr,
@@ -53,16 +56,23 @@ module svga_linebuf
 localparam [28:0] FB_BASE_WORDS = 29'h07F0_0000; // 0x3F80_0000 >> 3
 
 //------------------------------------------------------------------------------ line buffer
-// 2 halves x 256 words x 64 bits (up to 2048 bytes per line: 1024 pixels at 16bpp)
-reg [63:0] lb [0:511];
-reg  [8:0] lb_wr_addr, lb_wr_addr_q;
+// 2 halves x 512 words x 64 bits (up to 4096 bytes per line: 1024 pixels at 24bpp)
+reg [63:0] lb [0:1023];
+reg  [9:0] lb_wr_addr, lb_wr_addr_q;
 reg        lb_we;
 reg [63:0] lb_wr_data;
 always @(posedge clk) if (lb_we) lb[lb_wr_addr_q] <= lb_wr_data;
 
-reg  [8:0] lb_rd_addr;
+reg  [9:0] lb_rd_addr;
 reg [63:0] lb_rd_q;
 always @(posedge clk) lb_rd_q <= lb[lb_rd_addr];
+
+// 24bpp: second word of a straddling pixel, read the cycle after the first
+// (sequenced in the raster block below)
+reg        rd2_pending;   // issue the read of word+1 next cycle
+reg        rd2_capture;   // lb_rd_q holds the first word now: keep it
+reg [63:0] q0;            // first word of the pixel
+reg  [2:0] b24_sel;       // byte offset of the pixel in q0
 
 //------------------------------------------------------------------------------ raster side
 reg [10:0] x_cnt;       // dot index within the display window
@@ -70,6 +80,7 @@ reg        y_par;       // buffer half of the line being displayed
 reg  [9:0] vis_line;    // index of the raster line being displayed
 reg  [2:0] byte_sel;    // 8bpp: byte of the buffer word for the current dot
 reg  [1:0] hw_sel;      // 16bpp: half-word of the buffer word for the current dot
+wire [12:0] b24_off = {x_next, 1'b0} + x_next;   // 24bpp: byte offset of the pixel at this dot (3x)
 reg        nd_d, vs_d;
 wire [10:0] x_next = not_displaying ? 11'd0 : x_cnt + 1'd1;
 
@@ -88,10 +99,19 @@ always @(posedge clk) begin
 	if (reset | ~enable) begin
 		x_cnt <= 0; y_par <= 0; vis_line <= 0; nd_d <= 1; vs_d <= 0;
 		req_valid <= 0; req_line1 <= 0; req_line <= 0; req_buf <= 0;
-		lb_rd_addr <= 0; byte_sel <= 0; hw_sel <= 0;
+		lb_rd_addr <= 0; byte_sel <= 0; hw_sel <= 0; b24_sel <= 0;
+		rd2_pending <= 0; rd2_capture <= 0;
 	end
 	else begin
 		vs_d <= vsync;
+
+		// 24bpp second-word read: the dot's ce (below) sets the first address and
+		// rd2_pending; the next cycle addresses word+1, the cycle after keeps the
+		// first word in q0 while lb_rd_q delivers the second
+		rd2_pending <= 0;
+		rd2_capture <= rd2_pending;
+		if (rd2_pending) lb_rd_addr <= lb_rd_addr + 1'd1;
+		if (rd2_capture) q0 <= lb_rd_q;
 
 		// engine accepted the current request (handled first: a new request
 		// raised in the same cycle below must win)
@@ -110,14 +130,21 @@ always @(posedge clk) begin
 		if (ce_pix) begin
 			nd_d       <= not_displaying;
 			x_cnt      <= x_next;
-			if (bpp16) begin
-				lb_rd_addr <= {y_par, x_next[9:2]};
-				hw_sel     <= x_next[1:0];
-			end
-			else begin
-				lb_rd_addr <= {y_par, x_next[10:3]};
-				byte_sel   <= x_next[2:0];
-			end
+			case (bpp)
+				2'd1: begin                                   // 16bpp: 4 pixels per word
+					lb_rd_addr <= {y_par, x_next[10:2]};
+					hw_sel     <= x_next[1:0];
+				end
+				2'd2: begin                                   // 24bpp: word of byte 3x, then the next one
+					lb_rd_addr  <= {y_par, b24_off[11:3]};
+					b24_sel     <= b24_off[2:0];
+					rd2_pending <= 1;
+				end
+				default: begin                                // 8bpp: 8 pixels per word
+					lb_rd_addr <= {y_par, x_next[10:3]};
+					byte_sel   <= x_next[2:0];
+				end
+			endcase
 			if (line_end) begin
 				// line n done: fetch raster line n+2 into the half line n used
 				req_valid <= 1;
@@ -144,7 +171,12 @@ end
 // x[1:0] of word x[9:2] (16bpp). Address and select are registered at the
 // previous dot; the RAM read lands one clock later, and dots are >= 3 clocks apart.
 assign pixel = lb_rd_q[byte_sel * 8 +: 8];
-assign rgb   = rgb16(lb_rd_q[hw_sel * 16 +: 16]);
+// 24bpp: bytes 3x..3x+2 of {word+1, word}: memory order B,G,R (VESA) when the
+// format says BGR, R,G,B otherwise
+wire [127:0] w24 = {lb_rd_q, q0};
+wire  [23:0] p24 = w24[b24_sel * 8 +: 24];
+assign rgb   = (bpp == 2'd2) ? (fmt16[1] ? {p24[23:16], p24[15:8], p24[7:0]} : {p24[7:0], p24[15:8], p24[23:16]})
+                             : rgb16(lb_rd_q[hw_sel * 16 +: 16]);
 
 // 16bpp word -> RGB888 (top bits replicated), same interpretation as the HPS scaler
 function [23:0] rgb16(input [15:0] w);
@@ -182,8 +214,9 @@ always @(posedge clk) begin
 				if (req_valid & ~req_taken & ~ddr_busy) begin
 					req_taken  <= 1;
 					cur_addr   <= FB_BASE_WORDS + {10'd0, start_addr[19:1]} + req_line * stride_words;
-					words_left <= bpp16 ? {width_words[7:0], 1'b0} : width_words;   // 16bpp: two bytes per pixel
-					lb_wr_addr <= {req_buf, 8'd0};
+					words_left <= (bpp == 2'd2) ? ({width_words[7:0], 1'b0} + width_words) :   // 24bpp: three bytes per pixel
+					              (bpp == 2'd1) ?  {width_words[7:0], 1'b0} : width_words;        // 16bpp: two
+					lb_wr_addr <= {req_buf, 9'd0};
 					state      <= S_ISSUE;
 				end
 			end

@@ -92,7 +92,7 @@ module vga
 	output              vga_lf_doublescan,
 	input               fb_native,          // 1: take the DAC index from fb_pixel inside the display window (8bpp)
 	input       [7:0]   fb_pixel,
-	input               fb_native16,        // 1: 16bpp framebuffer rendered natively: fb_rgb bypasses the palette
+	input               fb_native16,        // 1: 16/24bpp framebuffer rendered natively: fb_rgb bypasses the palette
 	input      [23:0]   fb_rgb
 );
 
@@ -1797,6 +1797,7 @@ reg ce_video_reg;
 always @(posedge clk_vga) ce_video_reg <= ce_video;
 
 assign vga_ce = ce_video_reg & (
+	(fb_native16)         ? 1'b1 :      // native 16/24bpp: one dot per pixel (the CRTC counts pixels, not bytes)
 	(vga_flags[1:0] == 3) ? ce_div3 : 
 	                        ~vga_lores | (                                                                                     // when in vga_lores mode (not 4x mode)...
 	                                        ~(vertical_doublescan & vert_cnt[0]) &                                             // undo vertical doublescan when active (omits odd lines)

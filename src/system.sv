@@ -140,7 +140,7 @@ module system (
 	input              video_f60,     // force VGA timing to 60 Hz; 0 preserves native refresh
 	input              video_border,	// show VGA overscan border (OSD)
 	input              video_fb_native,	// native analog output of the 8/16bpp framebuffer modes
-	input              video_fb_bpp16,	// the framebuffer mode is 16 bits per pixel
+	input        [1:0] video_fb_bpp,	// framebuffer depth: 0 = 8, 1 = 16, 2 = 24 bits per pixel
 	input        [1:0] video_fb_fmt16,	// 16bpp format, [1] BGR [0] 1555 (as FB_FORMAT[4:3])
 
 	// SVGA framebuffer descriptor (from vga.v) -> MiSTer HPS framebuffer path
@@ -978,7 +978,7 @@ svga_linebuf svga_linebuf
 	.clk            (clk_sys),
 	.reset          (reset | ~boot_done),
 	.enable         (video_fb_native),
-	.bpp16          (video_fb_bpp16),
+	.bpp            (video_fb_bpp),
 	.fmt16          (video_fb_fmt16),
 	.ce_pix         (lf_ce),
 	.not_displaying (lf_nd),
@@ -1292,7 +1292,7 @@ vga vga_inst
 	.vga_lf_doublescan (lf_doublescan),
 	.fb_native         (video_fb_native),
 	.fb_pixel          (lf_pixel),
-	.fb_native16       (video_fb_native & video_fb_bpp16),
+	.fb_native16       (video_fb_native & |video_fb_bpp),
 	.fb_rgb            (lf_rgb)
 );
 

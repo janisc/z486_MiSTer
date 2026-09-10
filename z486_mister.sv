@@ -197,7 +197,7 @@ reg  [2:0]  reset_sync_r = 3'b111;
 wire [127:0] status;
 wire         vga_native = status[3]; // OSD "VGA Output": 1 = native 31 kHz raster on the analog port
 wire         fb_native;              // framebuffer mode rendered natively (svga_linebuf)
-wire         fb_bpp16;               // ... and it is a 16bpp mode
+wire   [1:0] fb_bpp;                 // ... at 0 = 8, 1 = 16, 2 = 24 bits per pixel
 wire  [1:0] cpu_speed_osd = {status[9] ^ status[8], status[8]};
 wire  [1:0] buttons;
 wire [10:0] ps2_key;
@@ -725,7 +725,7 @@ system #(
 	.video_f60           (video_f60),
 	.video_border        (~status[54] | vga_native),  // OSD "Border" (oM); native output always shows the real overscan
 	.video_fb_native     (fb_native),
-	.video_fb_bpp16      (fb_bpp16),
+	.video_fb_bpp        (fb_bpp),
 	.video_fb_fmt16      ({~status[5], ~status[6]}),
 
 	// SVGA framebuffer descriptor (vga.v) -> MiSTer HPS framebuffer (below)
@@ -1056,14 +1056,14 @@ reg         fb_force_60;
 // Framebuffer (SVGA) modes have no real-time raster, so they always use the scaler,
 // and the 60 Hz pixel-clock retiming is disabled in native mode: the resulting
 // 26.9 kHz line rate is below the range of any VGA monitor.
-// 8bpp and 16bpp framebuffer modes are rendered natively by svga_linebuf; the
-// 24bpp framebuffer mode still hands the analog port to the scaler.
-wire fb8         = ~vga_flags[2] && (vga_flags[1:0] == 2'd1);
+// All framebuffer depths (8, 16 and 24bpp) are rendered natively by svga_linebuf,
+// so in native mode the analog port never hands over to the scaler.
 wire fb16        = ~vga_flags[2] && (vga_flags[1:0] == 2'd2);
-assign fb_bpp16   = fb16;
-assign fb_native  = vga_native & fb_en & (fb8 | fb16);
-assign VGA_SCALER = vga_native ? (fb_en & ~(fb8 | fb16)) : 1'b1;
-assign video_f60  = vga_native ? (fb_en & ~(fb8 | fb16)) : (~status[4] | fb_force_60);
+wire fb24        = ~vga_flags[2] && (vga_flags[1:0] == 2'd3);
+assign fb_bpp     = fb24 ? 2'd2 : fb16 ? 2'd1 : 2'd0;
+assign fb_native  = vga_native & fb_en;
+assign VGA_SCALER = ~vga_native;
+assign video_f60  = vga_native ? 1'b0 : (~status[4] | fb_force_60);
 // Native mode: give the CRT the real VGA sync polarity (400-line modes are H-/V+,
 // 350-line H+/V-, 480-line H-/V-). Scaler mode keeps the framework default.
 assign VGA_HS_POS = vga_native & ~core_hs_neg;
@@ -1094,7 +1094,7 @@ assign FB_PAL_WR     = vga_pal_we;
 `endif
 `else
 assign fb_native  = 1'b0;
-assign fb_bpp16   = 1'b0;
+assign fb_bpp     = 2'd0;
 assign VGA_SCALER = ~vga_native;
 assign video_f60  = ~status[4] & ~vga_native;
 assign VGA_HS_POS = vga_native & ~core_hs_neg;
