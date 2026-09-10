@@ -139,7 +139,9 @@ module system (
 	output wire [7:0]  video_b,
 	input              video_f60,     // force VGA timing to 60 Hz; 0 preserves native refresh
 	input              video_border,	// show VGA overscan border (OSD)
-	input              video_fb_native,	// native analog output of the 8bpp framebuffer modes
+	input              video_fb_native,	// native analog output of the 8/16bpp framebuffer modes
+	input              video_fb_bpp16,	// the framebuffer mode is 16 bits per pixel
+	input        [1:0] video_fb_fmt16,	// 16bpp format, [1] BGR [0] 1555 (as FB_FORMAT[4:3])
 
 	// SVGA framebuffer descriptor (from vga.v) -> MiSTer HPS framebuffer path
 	output wire [19:0] video_start_addr,
@@ -957,6 +959,8 @@ assign ioctl_wait           = 1'b0;
 // holds it for a whole burst, during which main_memory sees busy.
 wire        lf_ce, lf_nd, lf_vsync, lf_doublescan;
 wire  [7:0] lf_pixel;
+wire [23:0] lf_rgb;
+wire        lf_pix_first;
 wire [28:0] lf_ddram_addr;
 wire        lf_ddram_rd;
 wire  [7:0] lf_ddram_burstcnt;
@@ -975,6 +979,8 @@ svga_linebuf svga_linebuf
 	.clk            (clk_sys),
 	.reset          (reset | ~boot_done),
 	.enable         (video_fb_native),
+	.bpp16          (video_fb_bpp16),
+	.fmt16          (video_fb_fmt16),
 	.ce_pix         (lf_ce),
 	.not_displaying (lf_nd),
 	.vsync          (lf_vsync),
@@ -983,6 +989,8 @@ svga_linebuf svga_linebuf
 	.stride_words   (video_stride),
 	.width_words    (video_width),
 	.pixel          (lf_pixel),
+	.rgb            (lf_rgb),
+	.pix_first      (lf_pix_first),
 	.ddr_addr       (lf_ddram_addr),
 	.ddr_rd         (lf_ddram_rd),
 	.ddr_burstcnt   (lf_ddram_burstcnt),
@@ -1285,7 +1293,10 @@ vga vga_inst
 	.vga_lf_vsync      (lf_vsync),
 	.vga_lf_doublescan (lf_doublescan),
 	.fb_native         (video_fb_native),
-	.fb_pixel          (lf_pixel)
+	.fb_pixel          (lf_pixel),
+	.fb_native16       (video_fb_native & video_fb_bpp16),
+	.fb_rgb            (lf_rgb),
+	.fb_pix_first      (lf_pix_first)
 );
 
 

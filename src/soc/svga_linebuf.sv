@@ -1,16 +1,19 @@
 // SVGA framebuffer line fetcher for the native analog output.
 //
-// In the ET4000 linear 8bpp modes the CPU writes pixels into a framebuffer in
-// the HPS DDR3 (base 0x3F80_0000, see main_memory.sv), which the HPS scaler
+// In the ET4000 linear framebuffer modes the CPU writes pixels into a framebuffer
+// in the HPS DDR3 (base 0x3F80_0000, see main_memory.sv), which the HPS scaler
 // reads for HDMI. The FPGA raster carries no pixel data in those modes. This
 // module reads each scanline from DDR3 ahead of time into a double line buffer
-// and presents the pixel index for the dot being displayed, so the VGA block
-// can run it through the DAC palette and the analog output shows the mode
-// natively.
+// and presents the pixel for the dot being displayed: in the 8bpp modes the DAC
+// index, which vga.v runs through the palette; in the 16bpp (15/16-bit
+// hi-colour) modes the RGB value itself, which vga.v routes past the palette.
 //
 // Timing contract (all in the VGA clock, which is clk_sys):
 //  - ce_pix / not_displaying / vsync come from the same pipeline stage as the
 //    DAC index mux in vga.v, so counting displayed dots here aligns with it.
+//  - In the 16bpp modes the CRTC is programmed in bytes (two dots per pixel,
+//    1280 dots for 640 pixels) and vga.v doubles the dot rate; each pixel is
+//    held for two dots and `pix_first` marks the first dot of every pixel.
 //  - At the end of each displayed line n the line for raster line n+2 is
 //    fetched into the buffer half that line n just used; line n+1 is already in
 //    the other half. Lines 0 and 1 are fetched at vsync. A fetch has a full
@@ -22,7 +25,9 @@ module svga_linebuf
 (
 	input             clk,
 	input             reset,
-	input             enable,          // 8bpp framebuffer mode with native output selected
+	input             enable,          // framebuffer mode with native output selected
+	input             bpp16,           // 1: 16 bits per pixel, else 8
+	input       [1:0] fmt16,           // [1] 1=BGR byte order, [0] 1=1555 else 565 (matches FB_FORMAT[4:3])
 
 	// raster timing from vga.v
 	input             ce_pix,          // dot clock enable
@@ -31,9 +36,11 @@ module svga_linebuf
 	input             doublescan,      // each framebuffer line is displayed twice
 	input      [19:0] start_addr,      // CRTC start address (4-byte units)
 	input       [8:0] stride_words,    // CRTC offset register = line stride in 64-bit words
-	input       [8:0] width_words,     // displayed width in 64-bit words (8 pixels each)
+	input       [8:0] width_words,     // displayed width in 64-bit words (8 bytes each)
 
-	output      [7:0] pixel,           // DAC index of the dot being displayed
+	output      [7:0] pixel,           // 8bpp: DAC index of the dot being displayed
+	output reg [23:0] rgb,             // 16bpp: colour of the dot being displayed
+	output reg        pix_first,       // 16bpp: this dot is the first of its pixel (pixel clock enable)
 
 	// DDR3 read master (64-bit words, address in words)
 	output reg [28:0] ddr_addr,
@@ -48,24 +55,25 @@ module svga_linebuf
 localparam [28:0] FB_BASE_WORDS = 29'h07F0_0000; // 0x3F80_0000 >> 3
 
 //------------------------------------------------------------------------------ line buffer
-// 2 halves x 128 words x 64 bits (up to 1024 pixels per line)
-reg [63:0] lb [0:255];
-reg  [7:0] lb_wr_addr, lb_wr_addr_q;
+// 2 halves x 256 words x 64 bits (up to 2048 bytes per line: 1024 pixels at 16bpp)
+reg [63:0] lb [0:511];
+reg  [8:0] lb_wr_addr, lb_wr_addr_q;
 reg        lb_we;
 reg [63:0] lb_wr_data;
 always @(posedge clk) if (lb_we) lb[lb_wr_addr_q] <= lb_wr_data;
 
-reg  [7:0] lb_rd_addr;
+reg  [8:0] lb_rd_addr;
 reg [63:0] lb_rd_q;
 always @(posedge clk) lb_rd_q <= lb[lb_rd_addr];
 
 //------------------------------------------------------------------------------ raster side
-reg  [9:0] x_cnt;       // dot index within the display window
+reg [10:0] x_cnt;       // dot index within the display window
 reg        y_par;       // buffer half of the line being displayed
 reg  [9:0] vis_line;    // index of the raster line being displayed
-reg  [2:0] byte_sel;
+reg  [2:0] byte_sel;    // 8bpp: byte of the buffer word for the current dot
+reg  [1:0] hw_sel;      // 16bpp: half-word of the buffer word for the pixel being looked up
 reg        nd_d, vs_d;
-wire [9:0] x_next = not_displaying ? 10'd0 : x_cnt + 1'd1;
+wire [10:0] x_next = not_displaying ? 11'd0 : x_cnt + 1'd1;
 
 // fetch request to the engine (single entry; the engine latches it on accept)
 reg        req_valid;
@@ -78,11 +86,18 @@ wire       vs_start = vsync & ~vs_d;
 wire       line_end = ce_pix & not_displaying & ~nd_d;   // display window just closed
 wire [9:0] line_n2  = vis_line + 2'd2;
 
+// 16bpp pixel lookahead: pixel p is addressed at the first dot of pixel p-1 (or
+// continuously during blanking for pixel 0), so its RAM word is ready well before
+// it is latched at the first dot of pixel p. Dots can be a single clock apart at
+// the doubled dot rate, pixels never are.
+wire [10:0] px_next  = x_next[10:1] + 1'd1;               // pixel after the one starting at x_next
+wire        px_start = not_displaying | ~x_next[0];       // the dot starting now is a pixel start
+
 always @(posedge clk) begin
 	if (reset | ~enable) begin
 		x_cnt <= 0; y_par <= 0; vis_line <= 0; nd_d <= 1; vs_d <= 0;
 		req_valid <= 0; req_line1 <= 0; req_line <= 0; req_buf <= 0;
-		lb_rd_addr <= 0; byte_sel <= 0;
+		lb_rd_addr <= 0; byte_sel <= 0; hw_sel <= 0; rgb <= 0; pix_first <= 1;
 	end
 	else begin
 		vs_d <= vsync;
@@ -104,8 +119,19 @@ always @(posedge clk) begin
 		if (ce_pix) begin
 			nd_d       <= not_displaying;
 			x_cnt      <= x_next;
-			lb_rd_addr <= {y_par, x_next[9:3]};
-			byte_sel   <= x_next[2:0];
+			if (bpp16) begin
+				pix_first <= px_start;
+				if (px_start) begin
+					rgb        <= rgb16(lb_rd_q[hw_sel * 16 +: 16]);
+					lb_rd_addr <= not_displaying ? {y_par, 8'd0} : {y_par, px_next[9:2]};
+					hw_sel     <= not_displaying ? 2'd0 : px_next[1:0];
+				end
+			end
+			else begin
+				pix_first  <= 1;
+				lb_rd_addr <= {y_par, x_next[10:3]};
+				byte_sel   <= x_next[2:0];
+			end
 			if (line_end) begin
 				// line n done: fetch raster line n+2 into the half line n used
 				req_valid <= 1;
@@ -128,10 +154,21 @@ always @(posedge clk) begin
 	end
 end
 
-// The pixel for dot x is byte x[2:0] of buffer word x[9:3]. Address and byte
-// select are registered at the previous dot; the RAM read lands one clock
+// 8bpp: the pixel for dot x is byte x[2:0] of buffer word x[10:3]. Address and
+// byte select are registered at the previous dot; the RAM read lands one clock
 // later, and dots are >= 3 clocks apart.
 assign pixel = lb_rd_q[byte_sel * 8 +: 8];
+
+// 16bpp word -> RGB888 (top bits replicated), same interpretation as the HPS scaler
+function [23:0] rgb16(input [15:0] w);
+	reg [4:0] a, c; reg [5:0] b;
+	begin
+		if (fmt16[0]) begin a = w[14:10]; b = {w[9:5], w[9]}; c = w[4:0]; end   // 1555
+		else          begin a = w[15:11]; b = w[10:5];        c = w[4:0]; end   // 565
+		rgb16 = fmt16[1] ? { c, c[4:2], b, b[5:4], a, a[4:2] }                  // BGR
+		                 : { a, a[4:2], b, b[5:4], c, c[4:2] };                  // RGB
+	end
+endfunction
 
 //------------------------------------------------------------------------------ fetch engine
 localparam S_IDLE = 2'd0, S_ISSUE = 2'd1, S_DATA = 2'd2;
@@ -157,7 +194,7 @@ always @(posedge clk) begin
 					req_taken  <= 1;
 					cur_addr   <= FB_BASE_WORDS + {10'd0, start_addr[19:1]} + req_line * stride_words;
 					words_left <= width_words;
-					lb_wr_addr <= {req_buf, 7'd0};
+					lb_wr_addr <= {req_buf, 8'd0};
 					state      <= S_ISSUE;
 				end
 			end
