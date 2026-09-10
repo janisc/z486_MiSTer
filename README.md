@@ -1,7 +1,8 @@
 # z486_MiSTer, native VGA output fork
 
 This is a fork of [nand2mario/z486_MiSTer](https://github.com/nand2mario/z486_MiSTer).
-It adds an option to drive a PC VGA CRT monitor from the MiSTer analog output with
+The changes were written by an AI (Claude); the goals came from the repository owner,
+who tested every build on real hardware. It adds an option to drive a PC VGA CRT monitor from the MiSTer analog output with
 the core's own raster instead of the HDMI scaler: 31.5 kHz lines at the mode's
 real refresh rate (70 Hz for text and mode 13h, 60 Hz for 640x480), the real dot
 clocks, the sync polarity a VGA card uses, and the picture placed after hsync
