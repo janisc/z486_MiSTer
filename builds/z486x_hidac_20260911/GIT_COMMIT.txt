@@ -1,0 +1,1 @@
+92f5abe247d99e4dfac3669121304cdc44d6ba40 native 16bpp: row pitch is the offset register x 8 in the 320x200 modes too (offset is 80 there; the doubling came from a misread dump and squashed the picture)
