@@ -127,8 +127,6 @@ localparam CONF_STR = {
 	"P1,Audio & Video;",
 	"P1-;",
 	"P1OMN,Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
-	"P1O5,16/24bit mode,BGR,RGB;",
-	"P1O6,16bit format,1555,565;",
 	"P1oM,Border,Yes,No;",
 	"P1-;",
 	"P1oP,FM mode,OPL3,OPL2 compatibility;",
@@ -201,6 +199,7 @@ wire [127:0] status;
 
 wire         fb_native;              // framebuffer mode rendered natively (svga_linebuf)
 wire   [1:0] fb_bpp;                 // ... at 0 = 8, 1 = 16, 2 = 24 bits per pixel
+wire         video_dac_565;          // HiColor DAC command register: 16bpp framebuffer is 5:6:5
 wire  [1:0] cpu_speed_osd = {status[9] ^ status[8], status[8]};
 wire  [1:0] buttons;
 wire [10:0] ps2_key;
@@ -729,7 +728,7 @@ system #(
 	.video_border        (~status[54]),  // OSD "Border" (oM): show the overscan border (both outputs share one raster)
 	.video_fb_native     (fb_native),
 	.video_fb_bpp        (fb_bpp),
-	.video_fb_fmt16      ({~status[5], ~status[6]}),
+	.video_dac_565       (video_dac_565),
 
 	// SVGA framebuffer descriptor (vga.v) -> MiSTer HPS framebuffer (below)
 	.video_start_addr    (vga_start_addr),
@@ -1076,7 +1075,10 @@ always @(posedge clk_sys) begin
 	fb_stride   <= {vga_stride, 3'b000};
 	fb_height   <= vga_flags[3] ? {2'b0, vga_height[10:1]} : {1'b0, vga_height};   // undo vertical doublescan
 	fb_fmt[2:0] <= (vga_flags[1:0] == 2'd3) ? 3'b101 : (vga_flags[1:0] == 2'd2) ? 3'b100 : 3'b011; // 011=8bpp 100=16bpp 101=24bpp
-	fb_fmt[4:3] <= {~status[5], ~status[6]}; // Match ao486's BGR/RGB and 1555/565 controls.
+	// [4] byte order (the framework's "BGR" is the little-endian VESA layout software
+	// writes), [3] 1 = 5:5:5: decided by the DAC command register the BIOS or driver
+	// programs, as on a real card, instead of an OSD option
+	fb_fmt[4:3] <= {1'b1, ~video_dac_565};
 	fb_off      <= vga_off;
 end
 assign FB_EN          = fb_en;

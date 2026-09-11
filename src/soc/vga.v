@@ -69,6 +69,7 @@ module vga
 	output reg [17:0]   vga_pal_d,
 	output reg  [7:0]   vga_pal_a,
 	output reg          vga_pal_we,
+	output              vga_dac_565,        // HiColor DAC command register says 5:6:5 (else 5:5:5) for 16bpp
 
 	output reg [19:0]   vga_start_addr,
 	output reg  [5:0]   vga_wr_seg,
@@ -812,8 +813,52 @@ wire [7:0] host_io_read_attrib =
 
 //------------------------------------------------------------------------------ dac
 
+// HiColor RAMDAC (Sierra SC15025 / AT&T 20C490 style) hidden command register.
+// Four reads of the pel mask (3C6h) in a row unlock it: the following accesses to
+// 3C6h hit the command register instead of the mask, until any access to
+// 3C7h-3C9h resets the count. Command bits 7:5 select the pixel format the AT&T
+// way (100 = 15bpp 5:5:5, 110 = 16bpp 5:6:5, 111 = 24bpp). With bit 4 set the
+// next unlocked write sequence is an extended-register access the Sierra way:
+// index, a zero byte, then data; the Tseng BIOS writes index 3 with data 02 for
+// its 15bpp modes, 03 for 16bpp, 05 for 24bpp, then leaves the command at 08.
+// Both roads end in vga_dac_565 (1 = 5:6:5), which selects the framebuffer format.
 reg [7:0] dac_mask;
-always @(posedge clk_sys) if(~rst_n) dac_mask <= 8'hFF; else if(io_c_write && io_address == 4'h6) dac_mask <= io_writedata[7:0];
+reg [2:0] hidac_cnt;      // 3C6h reads since the last 3C7h-3C9h access, saturating at 4
+reg [7:0] hidac_cmd;
+reg       hidac_armed;    // command written with bit 4: the next unlocked writes are index, zero, data0
+reg [1:0] hidac_phase;
+reg [7:0] hidac_idx, hidac_data0;
+wire      hidac_unlocked = (hidac_cnt == 3'd4);
+wire      dac_io = (io_c_read_valid || io_c_write) && (io_address == 4'h7 || io_address == 4'h8 || io_address == 4'h9);
+always @(posedge clk_sys) begin
+	if(~rst_n) begin
+		dac_mask <= 8'hFF; hidac_cnt <= 3'd0; hidac_cmd <= 8'h00; hidac_armed <= 1'b0; hidac_phase <= 2'd0;
+		hidac_idx <= 8'h00; hidac_data0 <= 8'h00;
+	end
+	else begin
+		if(dac_io) begin
+			hidac_cnt <= 3'd0; hidac_phase <= 2'd0;
+		end
+		else if(io_c_read_valid && io_address == 4'h6 && ~hidac_unlocked) hidac_cnt <= hidac_cnt + 3'd1;
+		if(io_c_write && io_address == 4'h6) begin
+			if(~hidac_unlocked) dac_mask <= io_writedata[7:0];
+			else if(hidac_armed) begin
+				case(hidac_phase)
+					2'd0: begin hidac_idx <= io_writedata[7:0]; hidac_phase <= 2'd1; end
+					2'd1: hidac_phase <= 2'd2;
+					default: begin hidac_data0 <= io_writedata[7:0]; hidac_armed <= 1'b0; end
+				endcase
+			end
+			else begin
+				hidac_cmd   <= io_writedata[7:0];
+				hidac_armed <= io_writedata[4];
+			end
+		end
+	end
+end
+wire       hidac_att   = hidac_cmd[7];                                        // AT&T-style extended mode
+wire       hidac_sierra = (hidac_idx == 8'h03);                                // Sierra extended register 3 written
+assign vga_dac_565 = hidac_att ? hidac_cmd[6] : (hidac_sierra && hidac_data0 == 8'h03);
 
 reg       dac_is_read;
 always @(posedge clk_sys) begin
@@ -876,7 +921,7 @@ wire [7:0] host_io_read_wire =
 	(io_c_read_valid && io_address == 4'h1)                      ? host_io_read_attrib : //attrib read data
 	(io_c_read_valid && io_address == 4'h4)                      ? { 5'd0, seq_io_index } : //seq index
 	(io_c_read_valid && io_address == 4'h5)                      ? host_io_read_seq : //seq data
-	(io_c_read_valid && io_address == 4'h6)                      ? dac_mask : //pel mask
+	(io_c_read_valid && io_address == 4'h6)                      ? (hidac_unlocked ? hidac_cmd : dac_mask) : //pel mask / hidden command register
 	(io_c_read_valid && io_address == 4'h7)                      ? { 6'd0, dac_is_read? 2'b11 : 2'b00 } : //dac state
 	(io_c_read_valid && io_address == 4'h8)                      ? dac_write_index :
 	(io_c_read_valid && io_address == 4'h9)                      ? dac_reg9 :
@@ -1466,7 +1511,7 @@ dpram_difclk #(8,18) dac_ram
 
 	.clk_b          (clk_vga),
 	.enable_b       (ce_video && ~seq_screen_disable && ~vgareg_blank),
-	.address_b      (pel_dac_index),
+	.address_b      (pel_dac_index & dac_mask),
 	.q_b            (dac_color)
 );
 

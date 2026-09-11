@@ -141,7 +141,7 @@ module system (
 	input              video_border,	// show VGA overscan border (OSD)
 	input              video_fb_native,	// native analog output of the 8/16bpp framebuffer modes
 	input        [1:0] video_fb_bpp,	// framebuffer depth: 0 = 8, 1 = 16, 2 = 24 bits per pixel
-	input        [1:0] video_fb_fmt16,	// 16bpp format, [1] BGR [0] 1555 (as FB_FORMAT[4:3])
+	output             video_dac_565,	// 16bpp framebuffer is 5:6:5 (from the HiColor DAC command register)
 
 	// SVGA framebuffer descriptor (from vga.v) -> MiSTer HPS framebuffer path
 	output wire [19:0] video_start_addr,
@@ -980,7 +980,7 @@ svga_linebuf svga_linebuf
 	.reset          (reset | ~boot_done),
 	.enable         (video_fb_native),
 	.bpp            (video_fb_bpp),
-	.fmt16          (video_fb_fmt16),
+	.fmt16          ({1'b1, ~video_dac_565}),
 	.ce_pix         (lf_ce),
 	.not_displaying (lf_nd),
 	.vsync          (lf_vsync),
@@ -1274,6 +1274,7 @@ vga vga_inst
 	.vga_pal_a         (video_pal_a),
 	.vga_pal_d         (video_pal_d),
 	.vga_pal_we        (video_pal_we),
+	.vga_dac_565       (video_dac_565),
 	.vga_start_addr    (video_start_addr),
 	.vga_wr_seg        (video_wr_seg),
 	.vga_rd_seg        (video_rd_seg),
