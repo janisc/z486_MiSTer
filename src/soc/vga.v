@@ -816,33 +816,61 @@ wire [7:0] host_io_read_attrib =
 
 //------------------------------------------------------------------------------ dac
 
-// HiColor RAMDAC (Sierra SC15025 / AT&T 20C490 style) hidden command register.
-// Four reads of the pel mask (3C6h) in a row unlock it: the following accesses to
-// 3C6h hit the command register instead of the mask, until any access to
-// 3C7h-3C9h resets the count. Drivers program the AT&T-style bits 7:5 (100 =
-// 15bpp 5:5:5, 110 = 16bpp 5:6:5, 111 = 24bpp). The Tseng BIOS goes the Sierra
-// way and leaves 08h for its 15bpp modes and 18h for 16bpp (and 24bpp), so with
-// bit 7 clear, bit 4 tells 5:6:5 from 5:5:5. Measured on the core with DACCMD
-// (debug floppy), 2026-09-11.
+// HiColor RAMDAC, modelled on the Sierra SC15025 the Tseng BIOS probes for.
+// Four reads of the pel mask (3C6h) in a row unlock the hidden command register:
+// the following 3C6h accesses hit it instead of the mask, until any access to
+// 3C7h-3C9h resets the count. A command written with bit 4 set opens the
+// extended-register protocol on 3C6h: the next writes are the index, a zero,
+// then the data (further bytes are plain command writes again). The BIOS's DAC
+// probe (7A6Bh) reads extended register 1 this way and takes a non-zero value as
+// "SC15025 present"; its mode set then writes extended register 3 = 02h for the
+// 15bpp modes, 03h for 16bpp and 05h for 24bpp, and finally the command 08h.
+// A command with bit 7 set is the AT&T 20C490 way instead (bits 7:5 = 100 15bpp,
+// 110 16bpp, 111 24bpp). Both roads end in vga_dac_565 (1 = 5:6:5), which selects
+// the framebuffer format as on a real card, instead of an OSD option.
 reg [7:0] dac_mask;
 reg [2:0] hidac_cnt;      // 3C6h reads since the last 3C7h-3C9h access, saturating at 4
 reg [7:0] hidac_cmd;
+reg       hidac_armed;    // command written with bit 4: index, zero, data follow
+reg [1:0] hidac_phase;
+reg [7:0] hidac_idx, hidac_ext3;
 wire      hidac_unlocked = (hidac_cnt == 3'd4);
+wire      hidac_data_rd  = hidac_unlocked && hidac_armed && (hidac_phase == 2'd2);
 wire      dac_io = (io_c_read_valid || io_c_write) && (io_address == 4'h7 || io_address == 4'h8 || io_address == 4'h9);
+wire [7:0] hidac_ext_rd = (hidac_idx == 8'h01) ? 8'h01 :        // extended register 1: "an SC15025 is here"
+                          (hidac_idx == 8'h03) ? hidac_ext3 : 8'h00;
 always @(posedge clk_sys) begin
 	if(~rst_n) begin
-		dac_mask <= 8'hFF; hidac_cnt <= 3'd0; hidac_cmd <= 8'h00;
+		dac_mask <= 8'hFF; hidac_cnt <= 3'd0; hidac_cmd <= 8'h00; hidac_armed <= 1'b0; hidac_phase <= 2'd0;
+		hidac_idx <= 8'h00; hidac_ext3 <= 8'h00;
 	end
 	else begin
-		if(dac_io) hidac_cnt <= 3'd0;
-		else if(io_c_read_valid && io_address == 4'h6 && ~hidac_unlocked) hidac_cnt <= hidac_cnt + 3'd1;
+		if(dac_io) begin
+			hidac_cnt <= 3'd0; hidac_phase <= 2'd0;
+		end
+		else if(io_c_read_valid && io_address == 4'h6) begin
+			if(~hidac_unlocked)    hidac_cnt <= hidac_cnt + 3'd1;
+			else if(hidac_data_rd) begin hidac_armed <= 1'b0; hidac_phase <= 2'd0; end
+		end
 		if(io_c_write && io_address == 4'h6) begin
-			if(~hidac_unlocked) dac_mask  <= io_writedata[7:0];
-			else                hidac_cmd <= io_writedata[7:0];
+			if(~hidac_unlocked) dac_mask <= io_writedata[7:0];
+			else if(~hidac_armed) begin
+				hidac_cmd   <= io_writedata[7:0];
+				hidac_armed <= io_writedata[4];
+				hidac_phase <= 2'd0;
+			end
+			else case(hidac_phase)
+				2'd0: begin hidac_idx <= io_writedata[7:0]; hidac_phase <= 2'd1; end
+				2'd1: hidac_phase <= 2'd2;
+				default: begin
+					if(hidac_idx == 8'h03) hidac_ext3 <= io_writedata[7:0];
+					hidac_armed <= 1'b0; hidac_phase <= 2'd0;
+				end
+			endcase
 		end
 	end
 end
-assign vga_dac_565 = hidac_cmd[7] ? hidac_cmd[6] : hidac_cmd[4];
+assign vga_dac_565 = hidac_cmd[7] ? hidac_cmd[6] : (hidac_ext3 == 8'h03);
 
 reg       dac_is_read;
 always @(posedge clk_sys) begin
@@ -905,7 +933,7 @@ wire [7:0] host_io_read_wire =
 	(io_c_read_valid && io_address == 4'h1)                      ? host_io_read_attrib : //attrib read data
 	(io_c_read_valid && io_address == 4'h4)                      ? { 5'd0, seq_io_index } : //seq index
 	(io_c_read_valid && io_address == 4'h5)                      ? host_io_read_seq : //seq data
-	(io_c_read_valid && io_address == 4'h6)                      ? (hidac_unlocked ? hidac_cmd : dac_mask) : //pel mask / hidden command register
+	(io_c_read_valid && io_address == 4'h6)                      ? (hidac_data_rd ? hidac_ext_rd : hidac_unlocked ? hidac_cmd : dac_mask) : //pel mask / hidden command register / extended register
 	(io_c_read_valid && io_address == 4'h7)                      ? { 6'd0, dac_is_read? 2'b11 : 2'b00 } : //dac state
 	(io_c_read_valid && io_address == 4'h8)                      ? dac_write_index :
 	(io_c_read_valid && io_address == 4'h9)                      ? dac_reg9 :
