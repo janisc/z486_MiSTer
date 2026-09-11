@@ -156,7 +156,9 @@ always @(posedge clk) begin
 		if (ce_pix) begin
 			nd_d       <= not_displaying;
 			x_cnt      <= x_next;
-			dot_ph     <= not_displaying ? 1'b0 : ~dot_ph;
+			dot_ph     <= ~dot_ph;                            // free-running like the VGA's own
+			                                                  // divided dot clock: the pixel clock
+			                                                  // enable must keep running in blanking
 			case (bpp)
 				2'd1: begin                                   // 16bpp: 4 pixels per word
 					lb_rd_addr <= {y_par, x_next[10:2]};
