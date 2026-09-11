@@ -644,11 +644,14 @@ reg [5:0] seg_rd, seg_wr;
 always @(posedge clk_sys) begin
 	if(~rst_n) {seg_rd, seg_wr} <= 0;
 	else if(io_c_write && io_address == 'hD) {seg_rd[3:0], seg_wr[3:0]} <= io_writedata;
-	// Port 3CB (segment bits 5:4, ET4000/W32 only) is not implemented: reads return FF
-	// (ET4000AX identification) and writes are ignored. Honouring writes while reads
-	// return FF let any read-modify-write of 3CB (the VGA BIOS does one on mode set)
-	// move the CPU read window 3 MB up, so VRAM read back zeros in the SVGA modes.
-	// Bits 5:4 are unused anyway with 1 MB of video memory.
+	// Port 3CB holds segment bits 5:4 (ET4000/W32 register). The BIOS reports 2 MB of
+	// video memory (from CRTC 37h), so bit 4 of each segment is needed to reach the
+	// second megabyte; bit 5 is not implemented and reads as 0. A chip detector writes
+	// 33h here and reads it back to tell a W32 from an ET4000AX: it gets 11h, so the
+	// card still identifies as the AX (see the read mux). Reads must return the
+	// implemented bits: the VGA BIOS read-modify-writes this port on mode set and in
+	// its window-set function, and a fixed FF or 00 there corrupted the other window.
+	else if(io_c_write && io_address == 'hB) {seg_rd[5:4], seg_wr[5:4]} <= {1'b0, io_writedata[4], 1'b0, io_writedata[0]};
 end
 
 //------------------------------------------------------------------------------ graphics controller io
@@ -906,14 +909,14 @@ wire [7:0] host_io_read_wire =
 	(io_c_read_valid && io_address == 4'h7)                      ? { 6'd0, dac_is_read? 2'b11 : 2'b00 } : //dac state
 	(io_c_read_valid && io_address == 4'h8)                      ? dac_write_index :
 	(io_c_read_valid && io_address == 4'h9)                      ? dac_reg9 :
-	// Port 3CB (bank bits 4-5) exists only on the ET4000/W32 family. Chip detectors
-	// (SciTech UniVBE, svgalib, VGAKIT) write to it and read it back to tell W32
-	// variants from the ET4000AX, then read the W32 revision at port 217B, which
-	// this core does not have, and end up at a chip they cannot drive (SciTech
-	// 5.3a: "ET6000, not supported"). Reading FF here identifies the card as an
-	// ET4000AX, which is what the emulated register set actually is. Writes still
-	// land in seg_rd/seg_wr[5:4] (unused with 1 MB of video memory).
-	(io_c_read_valid && io_address == 4'hB)                      ? 8'hFF :
+	// Port 3CB (bank bits 5:4): only bit 4 of each half is implemented (2 MB). Chip
+	// detectors (SciTech UniVBE, svgalib, VGAKIT) write 33h to it and read it back to
+	// tell W32 variants from the ET4000AX, then read the W32 revision at port 217B,
+	// which this core does not have, and end up at a chip they cannot drive (SciTech
+	// 5.3a: "ET6000, not supported"). Reading back 11h keeps the ET4000AX identity,
+	// which is what the emulated register set actually is, while bank switching
+	// above 1 MB works (VBE modes needing more than 1 MB, multi-page hi-colour).
+	(io_c_read_valid && io_address == 4'hB)                      ? { 3'b000, seg_rd[4], 3'b000, seg_wr[4] } :
 	(io_c_read_valid && io_address == 4'hD)                      ? { seg_rd[3:0], seg_wr[3:0] } :
 	(io_c_read_valid && io_address == 4'hE)                      ? { 4'd0, graph_io_index } :
 	(io_c_read_valid && io_address == 4'hF)                      ? host_io_read_graph :
