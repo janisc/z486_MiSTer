@@ -229,6 +229,7 @@ wire [19:0] vga_start_addr;
 wire  [8:0] vga_width;
 wire [10:0] vga_height;
 wire  [8:0] vga_stride;
+wire        vga_dotdiv;
 wire  [3:0] vga_flags;
 wire        vga_off;
 wire  [7:0] vga_pal_a;
@@ -735,6 +736,7 @@ system #(
 	.video_width         (vga_width),
 	.video_height        (vga_height),
 	.video_stride        (vga_stride),
+	.video_dotdiv        (vga_dotdiv),
 	.video_flags         (vga_flags),
 	.video_off           (vga_off),
 	.video_pal_a         (vga_pal_a),
@@ -1071,12 +1073,11 @@ assign VGA_VS_POS = ~core_vs_neg;
 always @(posedge clk_sys) begin
 	fb_en       <= ~vga_flags[2] && |vga_flags[1:0];
 	fb_base     <= {4'h3, 6'b111110, vga_start_addr, 2'b00};
-	// 16bpp with a line stride below two bytes per dot (320x200 hi-colour): one byte per
-	// dot, two dots per pixel, so the framebuffer is half as many pixels as dots
-	fb_width    <= (vga_flags[1:0] == 2'd3) ? 12'd640 :
-	               (vga_flags[1:0] == 2'd2 && vga_stride < {vga_width, 1'b0}) ? {vga_width, 2'b00} :
-	               vga_flags[2] ? {vga_width, 2'b00} : {vga_width, 3'b000};
-	fb_stride   <= {vga_stride, 3'b000};
+	fb_width    <= (vga_flags[1:0] == 2'd3) ? 12'd640 : vga_flags[2] ? {vga_width, 2'b00} : {vga_width, 3'b000};
+	// row pitch = offset register x 8 bytes; the 16bpp modes with the halved dot clock
+	// (320x200 hi-colour) advance twice that per row, as the BIOS's display-start
+	// arithmetic and the ET4000 do
+	fb_stride   <= (fb16 && vga_dotdiv) ? {vga_stride, 4'b0000} : {vga_stride, 3'b000};
 	fb_height   <= vga_flags[3] ? {2'b0, vga_height[10:1]} : {1'b0, vga_height};   // undo vertical doublescan
 	fb_fmt[2:0] <= (vga_flags[1:0] == 2'd3) ? 3'b101 : (vga_flags[1:0] == 2'd2) ? 3'b100 : 3'b011; // 011=8bpp 100=16bpp 101=24bpp
 	// [4] byte order (the framework's "BGR" is the little-endian VESA layout software

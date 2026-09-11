@@ -91,6 +91,7 @@ module vga
 	output              vga_lf_nd,          // 1 outside the display window (same stage as the DAC index mux)
 	output              vga_lf_vsync,       // vertical sync, active high
 	output              vga_lf_doublescan,
+	output              vga_lf_dotdiv,      // sequencer dot clock divided by two (a dot lasts two ce)
 	input               fb_native,          // 1: take the DAC index from fb_pixel inside the display window (8bpp)
 	input       [7:0]   fb_pixel,
 	input               fb_native16,        // 1: 16/24bpp framebuffer rendered natively: fb_rgb bypasses the palette
@@ -1915,5 +1916,6 @@ end
 // native SVGA line fetcher: raster-stage signals declared above
 assign vga_lf_vsync      = vgaprep_vert_sync;
 assign vga_lf_doublescan = vertical_doublescan;
+assign vga_lf_dotdiv     = seq_dotclock_divided;
 
 endmodule

@@ -12,10 +12,10 @@
 // Timing contract (all in the VGA clock, which is clk_sys):
 //  - ce_pix / not_displaying / vsync come from the same pipeline stage as the
 //    DAC index mux in vga.v, so counting displayed dots here aligns with it.
-//  - In the 16bpp modes the CRTC counts either two bytes per dot (640x480 and up:
-//    one dot per pixel, a line is twice as many words) or one byte per dot
-//    (320x200: two dots per pixel). Which one is read off the CRTC: a line stride
-//    of at least twice the displayed character count means two bytes per dot.
+//  - In the 16bpp modes the CRTC counts one dot per pixel with two bytes per dot
+//    (a line is twice as many words as the character count says). The 320-wide
+//    modes (VBE 10Dh/10Eh) do it like mode 13h: the sequencer halves the dot
+//    clock, so each dot, and each pixel, lasts two clock enables (dotdiv).
 //  - In the 24bpp mode the CRTC counts one byte per dot: a 640-pixel line is 1920
 //    dots, three per pixel (vga.v runs the dot clock at 3x so the line rate stays
 //    31.5 kHz; dots can then be a single clock apart, pixels never are). The
@@ -41,6 +41,7 @@ module svga_linebuf
 	input             not_displaying,  // 1 outside the display window (border, blank, sync)
 	input             vsync,           // vertical sync (level, active high)
 	input             doublescan,      // each framebuffer line is displayed twice
+	input             dotdiv,          // sequencer dot clock divided by two: a dot lasts two ce_pix
 	input      [19:0] start_addr,      // CRTC start address (4-byte units)
 	input       [8:0] stride_words,    // CRTC offset register = line stride in 64-bit words
 	input       [8:0] width_words,     // displayed width in 64-bit words (8 bytes each)
@@ -98,9 +99,10 @@ wire        px24_adv = (ph24 == 2'd0);                            // 24bpp: this
 wire  [9:0] px24_new = not_displaying ? 10'd0 : px24 + 1'd1;      // (blanking prefetches pixel 0)
 wire [11:0] b24_off  = {px24_new, 1'b0} + px24_new;              // 24bpp: byte offset of that pixel (3p)
 reg        nd_d, vs_d;
-wire [10:0] x_next = not_displaying ? 11'd0 : x_cnt + 1'd1;
-wire        bpd2   = (stride_words >= {width_words[7:0], 1'b0});   // 16bpp: two bytes per dot
-wire [10:0] px16   = bpd2 ? x_next : {1'b0, x_next[10:1]};         // 16bpp: pixel index of this dot
+wire  [9:0] pitch_words = (bpp == 2'd1 && dotdiv) ? {stride_words, 1'b0} : {1'b0, stride_words};
+reg         dot_ph;                                              // dotdiv: second clock of the dot
+wire        dot_adv = ~dotdiv | dot_ph;                          // this ce_pix starts a new dot
+wire [10:0] x_next = not_displaying ? 11'd0 : dot_adv ? x_cnt + 1'd1 : x_cnt;
 
 // fetch request to the engine (single entry; the engine latches it on accept)
 reg        req_valid;
@@ -117,7 +119,7 @@ wire [9:0] line_n2  = vis_line + 2'd2;
 
 always @(posedge clk) begin
 	if (reset | ~enable) begin
-		x_cnt <= 0; y_par <= 0; vis_line <= 0; nd_d <= 1; vs_d <= 0;
+		x_cnt <= 0; y_par <= 0; vis_line <= 0; nd_d <= 1; vs_d <= 0; dot_ph <= 0;
 		req_valid <= 0; req_line1 <= 0; req_line <= 0; req_buf <= 0; start_lat <= 0;
 		lb_rd_addr <= 0; byte_sel <= 0; hw_sel <= 0; b24_sel <= 0;
 		rd2_pending <= 0; rd2_capture <= 0; rd2_done <= 0; rgb24 <= 0; px24 <= 10'h3FF; ph24 <= 0; pix_ce <= 1;
@@ -154,11 +156,12 @@ always @(posedge clk) begin
 		if (ce_pix) begin
 			nd_d       <= not_displaying;
 			x_cnt      <= x_next;
+			dot_ph     <= not_displaying ? 1'b0 : ~dot_ph;
 			case (bpp)
 				2'd1: begin                                   // 16bpp: 4 pixels per word
-					lb_rd_addr <= {y_par, px16[10:2]};
-					hw_sel     <= px16[1:0];
-					pix_ce     <= bpd2 | ~x_next[0];              // 1 or 2 dots per pixel
+					lb_rd_addr <= {y_par, x_next[10:2]};
+					hw_sel     <= x_next[1:0];
+					pix_ce     <= dot_adv;                        // one pixel per dot
 				end
 				2'd2: begin                                   // 24bpp: 3 dots per pixel
 					// the 3-dot phase runs through blanking too (pixel clock enable every
@@ -178,7 +181,7 @@ always @(posedge clk) begin
 					byte_sel   <= x_next[2:0];
 				end
 			endcase
-			if (bpp == 2'd0) pix_ce <= 1;
+			if (bpp == 2'd0) pix_ce <= dot_adv;
 			if (line_end) begin
 				// line n done: fetch raster line n+2 into the half line n used
 				req_valid <= 1;
@@ -243,10 +246,13 @@ always @(posedge clk) begin
 				ddr_rd <= 0;
 				if (req_valid & ~req_taken & ~ddr_busy) begin
 					req_taken  <= 1;
-					cur_addr   <= FB_BASE_WORDS + {10'd0, start_lat[19:1]} + req_line * stride_words;
+					// row pitch: the offset register in 8-byte units, doubled in the 16bpp modes
+					// with the halved dot clock (320x200 hi-colour: measured against the BIOS's
+					// own display-start arithmetic, 640 bytes per row with offset = 40)
+					cur_addr   <= FB_BASE_WORDS + {10'd0, start_lat[19:1]} + req_line * pitch_words;
 					// 16bpp: the CRTC counts pixels, a line is twice the words; 8/24bpp: it
 					// counts bytes, width_words is already the line length
-					words_left <= (bpp == 2'd1 && bpd2) ? {width_words[7:0], 1'b0} : width_words;
+					words_left <= (bpp == 2'd1) ? {width_words[7:0], 1'b0} : width_words;
 					lb_wr_addr <= {req_buf, 9'd0};
 					state      <= S_ISSUE;
 				end
