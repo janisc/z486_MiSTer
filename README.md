@@ -89,7 +89,12 @@ framework blanks the analog picture with the same signal the scaler crops to).
 
 The emulated card identifies itself
 to chip detectors as an ET4000AX (port 3CB reads FF and writes to it are ignored), so SciTech
-UniVBE / Display Doctor 5.3a and later install and provide VBE 2.0 (banked).
+UniVBE / Display Doctor 5.3a and later install and provide VBE 2.0 (banked). Its
+RAMDAC now has the hidden command register of a HiColor DAC (unlocked by four
+reads of 3C6h), so the 15-bit or 16-bit pixel format of the hi-colour modes is
+whatever the BIOS or the driver programmed there, as on a real card; the stock
+`16/24bit mode` and `16bit format` options are gone. The pel mask is applied to
+the pixels like a real DAC does.
 
 Development and compatibility discussion is available in the
 [MiSTer FPGA forum thread](https://misterfpga.org/viewtopic.php?t=10667).
