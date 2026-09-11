@@ -1071,7 +1071,11 @@ assign VGA_VS_POS = ~core_vs_neg;
 always @(posedge clk_sys) begin
 	fb_en       <= ~vga_flags[2] && |vga_flags[1:0];
 	fb_base     <= {4'h3, 6'b111110, vga_start_addr, 2'b00};
-	fb_width    <= (vga_flags[1:0] == 2'd3) ? 12'd640 : vga_flags[2] ? {vga_width, 2'b00} : {vga_width, 3'b000};
+	// 16bpp with a line stride below two bytes per dot (320x200 hi-colour): one byte per
+	// dot, two dots per pixel, so the framebuffer is half as many pixels as dots
+	fb_width    <= (vga_flags[1:0] == 2'd3) ? 12'd640 :
+	               (vga_flags[1:0] == 2'd2 && vga_stride < {vga_width, 1'b0}) ? {vga_width, 2'b00} :
+	               vga_flags[2] ? {vga_width, 2'b00} : {vga_width, 3'b000};
 	fb_stride   <= {vga_stride, 3'b000};
 	fb_height   <= vga_flags[3] ? {2'b0, vga_height[10:1]} : {1'b0, vga_height};   // undo vertical doublescan
 	fb_fmt[2:0] <= (vga_flags[1:0] == 2'd3) ? 3'b101 : (vga_flags[1:0] == 2'd2) ? 3'b100 : 3'b011; // 011=8bpp 100=16bpp 101=24bpp

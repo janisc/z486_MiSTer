@@ -108,6 +108,8 @@ reg  [9:0] req_line;    // framebuffer line
 reg        req_buf;     // buffer half
 reg        req_line1;   // line 1 still to be requested after line 0 (frame start)
 reg        req_taken;   // one-cycle pulse from the engine
+reg [19:0] start_lat;   // start address latched at vertical retrace start, as the VGA CRTC does:
+                        // a display-start change (page flip) takes effect on the next frame only
 
 wire       vs_start = vsync & ~vs_d;
 wire       line_end = ce_pix & not_displaying & ~nd_d;   // display window just closed
@@ -116,7 +118,7 @@ wire [9:0] line_n2  = vis_line + 2'd2;
 always @(posedge clk) begin
 	if (reset | ~enable) begin
 		x_cnt <= 0; y_par <= 0; vis_line <= 0; nd_d <= 1; vs_d <= 0;
-		req_valid <= 0; req_line1 <= 0; req_line <= 0; req_buf <= 0;
+		req_valid <= 0; req_line1 <= 0; req_line <= 0; req_buf <= 0; start_lat <= 0;
 		lb_rd_addr <= 0; byte_sel <= 0; hw_sel <= 0; b24_sel <= 0;
 		rd2_pending <= 0; rd2_capture <= 0; rd2_done <= 0; rgb24 <= 0; px24 <= 10'h3FF; ph24 <= 0; pix_ce <= 1;
 	end
@@ -140,7 +142,7 @@ always @(posedge clk) begin
 		if (req_taken) begin
 			if (req_line1) begin
 				req_valid <= 1;
-				req_line  <= 10'd1;
+				req_line  <= doublescan ? 10'd0 : 10'd1;
 				req_buf   <= 1;
 				req_line1 <= 0;
 			end
@@ -191,6 +193,7 @@ always @(posedge clk) begin
 			// frame start: line 0 -> half 0 now, line 1 -> half 1 right after
 			vis_line  <= 0;
 			y_par     <= 0;
+			start_lat <= start_addr;
 			req_valid <= 1;
 			req_line  <= 0;
 			req_buf   <= 0;
@@ -240,7 +243,7 @@ always @(posedge clk) begin
 				ddr_rd <= 0;
 				if (req_valid & ~req_taken & ~ddr_busy) begin
 					req_taken  <= 1;
-					cur_addr   <= FB_BASE_WORDS + {10'd0, start_addr[19:1]} + req_line * stride_words;
+					cur_addr   <= FB_BASE_WORDS + {10'd0, start_lat[19:1]} + req_line * stride_words;
 					// 16bpp: the CRTC counts pixels, a line is twice the words; 8/24bpp: it
 					// counts bytes, width_words is already the line length
 					words_left <= (bpp == 2'd1 && bpd2) ? {width_words[7:0], 1'b0} : width_words;
