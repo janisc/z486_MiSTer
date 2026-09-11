@@ -2,20 +2,129 @@
 
 This is a fork of [nand2mario/z486_MiSTer](https://github.com/nand2mario/z486_MiSTer).
 The changes were written by an AI (Claude); the goals came from the repository owner,
-who tested every build on real hardware. It makes the MiSTer analog output drive
-a PC VGA CRT monitor with the core's own raster instead of the HDMI scaler: 31.5 kHz lines at the mode's
-real refresh rate (70 Hz for text and mode 13h, 60 Hz for 640x480), the real dot
-clocks, the sync polarity a VGA card uses, and the picture placed after hsync
-where a real card puts it, so one monitor adjustment fits every DOS mode.
-The SVGA framebuffer modes (256-colour, 15/16-bit and 24-bit) are rendered
-natively as well, so the analog port never hands over to the scaler.
+who tested every build on real hardware. It makes the MiSTer analog output drive a
+PC VGA CRT monitor with the core's own raster instead of the HDMI scaler: 31.5 kHz
+lines at the mode's real refresh rate, the real dot clocks, the sync polarity a VGA
+card uses, and the picture placed after hsync where a real card puts it, so one
+monitor adjustment fits every DOS mode. The SVGA framebuffer modes (256-colour,
+15/16-bit and 24-bit) are rendered natively as well, so the analog port never hands
+over to the scaler.
 
 The changes are on branch `native-vga`; `main` tracks upstream. Experiments,
-including a parked real dot-clock PLL, are on `exp/*` branches. The rbf files
-of every build made along the way, with a description of each, are in
-[`builds/`](builds/BUILDS.md). See "Analog VGA output" below for the details
-and the MiSTer.ini settings.
-Nothing here has been submitted upstream.
+including a parked real dot-clock PLL, are on `exp/*` branches. The rbf files of
+every build made along the way, with a description of each, are in
+[`builds/`](builds/BUILDS.md). Nothing here has been submitted upstream.
+
+## FAQ
+
+**I use a VGA monitor. What do I need?**
+Connect it to the analog output and make sure MiSTer.ini has `composite_sync=0`.
+Nothing else. The core puts real VGA timing on that port, 31.5 kHz with separate
+horizontal and vertical sync, which is what any VGA monitor from 1987 on accepts;
+the framework's composite sync option would merge the two syncs, and a PC monitor
+does not take that. There is no multisync requirement and no OSD setting.
+
+**Can I use HDMI instead of, or together with, the VGA output?**
+Yes, both are always on. HDMI carries the scaler picture as on every core, the
+analog port the raster. The one catch is that DOS runs at 70 Hz: with
+`vsync_adjust=2` the HDMI output follows that, and some TVs and monitors refuse
+70 Hz. If HDMI stays blank, set `vsync_adjust=0` (the MiSTer default) or `1`; the
+scaler then frame-converts to 60 Hz. The analog output is not affected.
+
+**There used to be a VSync option with Variable and 60 Hz. It is gone and my
+HDMI display shows no picture. Why, and what can I do?**
+That option retimed the core's own dot clock to make the raster 60 Hz. That gave
+a 27 kHz line rate, which no VGA monitor accepts, so it could not stay once the
+analog port became the native one. `vsync_adjust=0` in MiSTer.ini gives the HDMI
+output the same fixed 60 Hz, by frame conversion in the scaler, and the CRT keeps
+its real 70 Hz.
+
+**I want to play DOS games on a 15 kHz TV or arcade monitor. How?**
+The raster is 31 kHz and a 15 kHz set cannot sync to it, so put the scaler picture
+on the analog port instead, in a 240p mode the set accepts:
+
+```ini
+[z486]
+vga_scaler=1
+vsync_adjust=0
+video_mode=1440,32,124,120,240,4,3,15,27000
+```
+
+That is 240 lines at 60 Hz with 15.73 kHz lines (NTSC timing; a PAL set that
+takes NTSC will work). Then set Aspect ratio to Full Screen in the OSD's video
+settings, otherwise the framework fits the 4:3 picture into the wide frame as a
+narrow strip. The pixel clock is 27 MHz with 1440 dots rather than 13.5 MHz with
+720 because the HDMI PLL cannot synthesise 13.5 MHz exactly and came out 3 %
+high; at 27 MHz it is exact and the TV sees identical sync. Keep
+`composite_sync=1` if the set wants sync on the H line, as most do.
+
+**I use a DAC on the HDMI connector (direct video). What do I need?**
+`direct_video=1` in that ini, as for any core; the framework routes the raster to
+the HDMI pins. For a VGA monitor on the DAC add `composite_sync=0`. If the same
+ini serves other cores, `forced_scandoubler=1` keeps them at 31 kHz too; this core
+ignores it, its raster is never below 31 kHz.
+
+**Do I need UniVBE?**
+Not for games that use the BIOS's VBE 1.2 modes, which includes the 15/16/24-bit
+hi-colour ones. Games that require VBE 2.0 need SciTech UniVBE or Display Doctor
+5.3a or later; those identify the card as an ET4000 and install. If you install a
+new core build over an old UniVBE setup, run UVCONFIG once: it caches what it
+detected, including the RAMDAC.
+
+**Some settings disappeared from the Audio & Video menu. Why?**
+Four options are gone: `VGA Output` and `VSync`, which switched the analog port to
+the scaler or retimed the raster and have no place when the port is always native,
+and `16/24bit mode` and `16bit format`, which asked the user to guess the pixel
+format of the hi-colour modes. The emulated RAMDAC now has the command register
+the BIOS and the Windows driver program, so the format is whatever they set, as on
+a real card. `Border` stays and applies to both outputs. The aim was to remove
+combinations that did not make sense, not functionality; if something you need is
+missing, open an issue.
+
+**Which games and demos have been tested?**
+On the CRT: DOS text modes, Doom, Commander Keen (EGA), SimCity 2000 and Panzer
+General (640x480x256), Steel Panthers, Indiana Jones Desktop Adventures under
+Windows 3.1 (640x480 hi-colour), the demos Copper (per-line raster tricks) and
+Legend, and SciTech's VBETEST in every colour depth including 16-page 320x200
+hi-colour page flipping. The test tools (register dumps, retrace counters, VRAM
+banking, a resident INT 10h logger) and the debug floppy are described in
+[`builds/BUILDS.md`](builds/BUILDS.md).
+
+**Will this go into z486 or ao486?**
+Maybe. This started as an experiment and we are happy with the result, but more
+testing by more people is needed first. Do not wait for pull requests: the code is
+here under the same terms as the files it lives in (the ao486 BSD licence for the
+video code, Apache 2.0 for the z486 CPU), so if you want it somewhere, take it
+there.
+
+## How it works
+
+The analog VGA port always carries the core's own raster: the real 25.175 and
+28.322 MHz dot clocks (tripled for the 24bpp mode), 31.5 kHz lines at 70 Hz
+(mode 13h, text) or 60 Hz (640x480), the sync polarity a VGA card uses
+(400-line modes H-/V+, 350-line H+/V-, 480-line H-/V-), and the picture placed
+after hsync where a real card puts it. The SVGA framebuffer modes (8, 16 and
+24bpp) are fetched from the DDR3 framebuffer line by line and shown the same way,
+so the port never hands over to the scaler. There is no OSD switch: the HDMI
+output is always the scaler, the analog output always the raster, and the
+exceptions in the FAQ are MiSTer.ini settings handled by the framework. The
+`Border` option shows or hides the overscan border on both outputs (the framework
+blanks the analog picture with the same signal the scaler crops to).
+
+The emulated card identifies itself to chip detectors as an ET4000AX: port 3CB
+implements only the bank bit for the second megabyte and reads back 11h for the
+usual 33h probe, so SciTech UniVBE / Display Doctor 5.3a and later install and
+provide VBE 2.0 (banked), while the 2 MB the BIOS reports are really usable (VBE
+modes above 1 MB, the sixteen pages of 320x200 hi-colour). The RAMDAC is modelled
+on the Sierra SC15025 HiColor DAC the Tseng BIOS probes for (hidden command
+register behind four reads of 3C6h, extended registers), so the 15-bit or 16-bit
+pixel format of the hi-colour modes is whatever the BIOS or the driver programmed.
+The pel mask is applied to the pixels like a real DAC does. The 320x200 hi-colour
+modes (halved dot clock, like mode 13h) are shown natively too, and a display-start
+change takes effect at the next vertical retrace as on a real CRTC, so page
+flipping is tear-free on the analog output. SciTech's VBETEST (in the SDD 5.3a
+package) exercises all of this and is the fork's regression suite for the SVGA
+framebuffer modes.
 
 ---
 
@@ -48,60 +157,6 @@ the files as follows:
 - `z486_*.rbf` in `/media/fat/_Computer`
 - [boot0.rom](verilator/boot0.rom), [boot1.rom](verilator/boot1.rom), and disk
   images (`.vhd`) in `/media/fat/games/Z486`
-
-### Analog VGA output
-
-The analog VGA port always carries the core's own raster: the real 25.175 and
-28.322 MHz dot clocks (tripled for the 24bpp mode), 31.5 kHz lines at 70 Hz
-(mode 13h, text) or 60 Hz (640x480), the sync polarity a VGA card uses
-(400-line modes H-/V+, 350-line H+/V-, 480-line H-/V-), and the picture placed
-after hsync where a real card puts it, so one monitor preset fits every DOS
-mode. The SVGA framebuffer modes (8, 16 and 24bpp) are fetched from the
-framebuffer line by line and shown the same way. This is the signal a PC CRT
-monitor expects; 15 kHz TVs cannot sync to it. There is no OSD switch for it:
-the HDMI output is always the scaler, the analog output always the raster, and
-the exceptions are MiSTer.ini settings handled by the framework:
-
-- A PC monitor needs separate syncs: `composite_sync=0`.
-- HDMI at a fixed 60 Hz for displays that dislike 70 Hz: `vsync_adjust=0`
-  (the MiSTer default). The 70 Hz raster is frame-converted by the scaler; the
-  analog output is unaffected.
-- The scaler picture on the analog port instead of the raster (a 15 kHz TV, or
-  a VGA monitor that should show the HDMI mode): `vga_scaler=1`, together with a
-  `video_mode` the display accepts. Example for a 15 kHz TV that takes NTSC
-  timing (720x240 at 60 Hz, the 13.5 MHz "SD" pixel clock the HDMI transmitter
-  supports; untested at the time of writing):
-
-  ```ini
-  [z486]
-  vga_scaler=1
-  vsync_adjust=0
-  video_mode=720,16,62,60,240,4,3,15,13500
-  ```
-
-- A DAC on the HDMI connector instead of the analog board: `direct_video=1`.
-  The framework routes the same raster to the HDMI pins (the sync polarity is
-  then the framework's normalised one).
-
-The `Border` option shows or hides the overscan border on both outputs (the
-framework blanks the analog picture with the same signal the scaler crops to).
-`forced_scandoubler` has no effect: the raster is never below 31 kHz.
-
-The emulated card identifies itself to chip detectors as an ET4000AX: port 3CB
-implements only the bank bit for the second megabyte and reads back 11h for the
-usual 33h probe, so SciTech UniVBE / Display Doctor 5.3a and later install and
-provide VBE 2.0 (banked), while the 2 MB the BIOS reports are really usable (VBE
-modes above 1 MB, the sixteen pages of 320x200 hi-colour). The RAMDAC is modelled
-on the Sierra SC15025 HiColor DAC the Tseng BIOS probes for (hidden command
-register behind four reads of 3C6h, extended registers), so the 15-bit or 16-bit
-pixel format of the hi-colour modes is whatever the BIOS or the driver programmed,
-as on a real card; the stock `16/24bit mode` and `16bit format` options are gone.
-The pel mask is applied to the pixels like a real DAC does. The 320x200 hi-colour
-modes (halved dot clock, like mode 13h) are shown natively too, and a display-start
-change takes effect at the next vertical retrace as on a real CRTC, so page
-flipping is tear-free on the analog output. SciTech's VBETEST (in the SDD 5.3a
-package) exercises all of this and is the fork's regression suite for the SVGA
-framebuffer modes.
 
 Development and compatibility discussion is available in the
 [MiSTer FPGA forum thread](https://misterfpga.org/viewtopic.php?t=10667).
