@@ -87,14 +87,21 @@ The `Border` option shows or hides the overscan border on both outputs (the
 framework blanks the analog picture with the same signal the scaler crops to).
 `forced_scandoubler` has no effect: the raster is never below 31 kHz.
 
-The emulated card identifies itself
-to chip detectors as an ET4000AX (port 3CB reads FF and writes to it are ignored), so SciTech
-UniVBE / Display Doctor 5.3a and later install and provide VBE 2.0 (banked). Its
-RAMDAC now has the hidden command register of a HiColor DAC (unlocked by four
-reads of 3C6h), so the 15-bit or 16-bit pixel format of the hi-colour modes is
-whatever the BIOS or the driver programmed there, as on a real card; the stock
-`16/24bit mode` and `16bit format` options are gone. The pel mask is applied to
-the pixels like a real DAC does.
+The emulated card identifies itself to chip detectors as an ET4000AX: port 3CB
+implements only the bank bit for the second megabyte and reads back 11h for the
+usual 33h probe, so SciTech UniVBE / Display Doctor 5.3a and later install and
+provide VBE 2.0 (banked), while the 2 MB the BIOS reports are really usable (VBE
+modes above 1 MB, the sixteen pages of 320x200 hi-colour). The RAMDAC is modelled
+on the Sierra SC15025 HiColor DAC the Tseng BIOS probes for (hidden command
+register behind four reads of 3C6h, extended registers), so the 15-bit or 16-bit
+pixel format of the hi-colour modes is whatever the BIOS or the driver programmed,
+as on a real card; the stock `16/24bit mode` and `16bit format` options are gone.
+The pel mask is applied to the pixels like a real DAC does. The 320x200 hi-colour
+modes (halved dot clock, like mode 13h) are shown natively too, and a display-start
+change takes effect at the next vertical retrace as on a real CRTC, so page
+flipping is tear-free on the analog output. SciTech's VBETEST (in the SDD 5.3a
+package) exercises all of this and is the fork's regression suite for the SVGA
+framebuffer modes.
 
 Development and compatibility discussion is available in the
 [MiSTer FPGA forum thread](https://misterfpga.org/viewtopic.php?t=10667).

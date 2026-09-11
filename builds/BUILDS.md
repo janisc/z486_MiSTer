@@ -44,6 +44,7 @@ against a stock build of upstream `6075a33` on 2026-09-11:
 
 | Folder / rbf | Branch / commit | Contents | Status |
 |---|---|---|---|
+| `z486x_hidac_20260911` | `exp/hicolor-dac` `74490cc` | Always-native build + HiColor RAMDAC modelled on the Sierra SC15025 (hidden command register, extended-register protocol the Tseng BIOS probes and programs; `16/24bit mode` and `16bit format` OSD options removed, pel mask applied) + port 3CB bank bit for the second megabyte (reads back 11h, still an ET4000AX to probes) + native 320x200 hi-colour (halved dot clock: two clocks per dot and pixel) + display start latched at vertical retrace + HDMI framebuffer stride for those modes. Five builds: v1 armed protocol, v2 simplified (broke the BIOS's DAC identification: 16-bit modes as 5:5:5), v3 + 3CB + retrace latch (320x200 half width), v4 Sierra model + dot-clock stepping (320x200 blank: pixel enable stopped in blanking), v5 free-running dot phase (picture squashed into the top half: row pitch wrongly doubled after a misread register dump), v6 pitch = offset x 8 like every other mode. Release 8 candidate. | VBETEST 15/16/24-bit, 16-page flip on the CRT (webcam), Indy, SP, Copper, UniVBE identification |
 | `z486x_native_20260911` | `exp/always-native` `a9fcd38` | Release 7 + the analog port is always native: OSD `VGA Output` and `VSync` removed, no scaler request, no 60 Hz retiming; Border stays (applies to both outputs); MiSTer.ini `vga_scaler` / `vsync_adjust` / `direct_video` cover the exceptions (README). Release 8 candidate, on the card as `z486nv_20260911.rbf`. | harness regressions pass; CRT / DAC direct video / 15 kHz ini to be tested |
 | `z486x_latch_20260910` | `exp/crtc-line-latch` `a85a231` | 24bpp build + CRTC horizontal retrace start/end/skew latched at the end of each line (writes take effect next line, as on real ISA timing). | tested: harness regressions pass; Copper wobble on the CRT much better, some dark flashing top/bottom in the helicopter part remains |
 | `z486x_24bpp_20260910` | `exp/native-24bpp` | Native 24bpp framebuffer output (four builds: 1 dot/px guess, 2:3 mapping guess, 3 dots/px at 3x clock with a per-clock pixel mix, then colour registered per pixel). | tested OK with DISP24 on the native path |
@@ -59,6 +60,25 @@ against a stock build of upstream `6075a33` on 2026-09-11:
 | `z486x_et4k_20260909` | `exp/et4000-id` `d0242ae` | Release 3 + port 3CB reads FF so chip detectors (SciTech UniVBE/SDD, svgalib, VGAKIT) identify the card as an ET4000AX instead of falling through to "ET6000, not supported". | tested OK: UniVBE 5.3a and 6.7 now install (ET4000, 1 MB, VBE 2.0 banked); Steel Panthers still black (dynamic difference after mode set, unresolved) |
 
 ## Facts learned
+
+- The Tseng BIOS sizes video memory from CRTC 37h (bit 3 RAM chip size, bit 0 bus
+  width, plus 32h bit 7): 2 MB on this core, stock included. Chip probes (svgalib,
+  VGADOC, SciTech) write 33h to port 3CB and read it back; anything but 33h means
+  ET4000AX, so implementing only bit 4 of each bank half keeps the identity and the
+  second megabyte.
+- The BIOS's DAC probe (7A6Bh) reads Sierra extended register 1 through the
+  command-with-bit-4 / index / zero / data sequence on 3C6h; its VBE mode set writes
+  extended register 3 = 02h/03h/05h for 15/16/24 bpp and leaves the command at 08h.
+  A DAC that answers as a plain HiColor type gets 5:5:5 for the 16-bit modes.
+- VBE mode 10Dh (320x200 hi-colour) is 40 characters wide, offset 80 (640-byte rows,
+  8 bytes per offset unit like every mode), row scan count 1 for the line doubling,
+  and the sequencer's halved dot clock like mode 13h; VBETEST puts its 16 pages on
+  64 KB boundaries and sets the display start with an x offset.
+- The framework's scaler reads the live framebuffer base per line, so a display-start
+  change mid-frame tears on HDMI (stock too); the native path latches it at vsync.
+- Debugging recipe that settled the layout questions: MODEDUMP.COM (mode info, 4F06,
+  4F07, CRTC/SEQ/ATC/GR dump) plus fbscan's DDR3 dump for the real pitch of the
+  picture; a webcam burst of the CRT for anything that flickers.
 
 - The framework normalizes sync polarity and always drives N/N; real polarity needs
   the two new ports (400-line modes H-/V+, 350-line H+/V-, 480-line H-/V-).

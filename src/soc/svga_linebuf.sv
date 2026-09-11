@@ -99,7 +99,6 @@ wire        px24_adv = (ph24 == 2'd0);                            // 24bpp: this
 wire  [9:0] px24_new = not_displaying ? 10'd0 : px24 + 1'd1;      // (blanking prefetches pixel 0)
 wire [11:0] b24_off  = {px24_new, 1'b0} + px24_new;              // 24bpp: byte offset of that pixel (3p)
 reg        nd_d, vs_d;
-wire  [9:0] pitch_words = (bpp == 2'd1 && dotdiv) ? {stride_words, 1'b0} : {1'b0, stride_words};
 reg         dot_ph;                                              // dotdiv: second clock of the dot
 wire        dot_adv = ~dotdiv | dot_ph;                          // this ce_pix starts a new dot
 wire [10:0] x_next = not_displaying ? 11'd0 : dot_adv ? x_cnt + 1'd1 : x_cnt;
@@ -248,10 +247,9 @@ always @(posedge clk) begin
 				ddr_rd <= 0;
 				if (req_valid & ~req_taken & ~ddr_busy) begin
 					req_taken  <= 1;
-					// row pitch: the offset register in 8-byte units, doubled in the 16bpp modes
-					// with the halved dot clock (320x200 hi-colour: measured against the BIOS's
-					// own display-start arithmetic, 640 bytes per row with offset = 40)
-					cur_addr   <= FB_BASE_WORDS + {10'd0, start_lat[19:1]} + req_line * pitch_words;
+					// row pitch = the offset register in 8-byte units in every framebuffer mode
+					// (320x200 hi-colour has offset 80 = 640 bytes, halved dot clock, 40 chars)
+					cur_addr   <= FB_BASE_WORDS + {10'd0, start_lat[19:1]} + req_line * stride_words;
 					// 16bpp: the CRTC counts pixels, a line is twice the words; 8/24bpp: it
 					// counts bytes, width_words is already the line length
 					words_left <= (bpp == 2'd1) ? {width_words[7:0], 1'b0} : width_words;
