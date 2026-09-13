@@ -90,6 +90,18 @@ hi-colour page flipping. The test tools (register dumps, retrace counters, VRAM
 banking, a resident INT 10h logger) and the debug floppy are described in
 [`builds/BUILDS.md`](builds/BUILDS.md).
 
+**Which modes do not work on the CRT?**
+A full VBETEST sweep of every VBE mode found these limits. All 1024x768 and 1280x1024
+modes lose the CRT: the core knows four dot clocks and gives the ET4000's clock index 2
+32.5 MHz where a real board has 65 MHz, so their lines run below 30 kHz (HDMI shows
+them). The 16-colour modes above 64 KB per plane, 1024x768 and 1280x1024, also repeat
+the picture vertically: the legacy VGA memory is four 64 KB planes, as in stock and ao486.
+800x600 in 24 bit is beyond the analog port at the core's 85 MHz. UniVBE's own 640x350 and
+640x400 15-bit modes program a halved dot clock and run at 15.7 kHz; the BIOS's 15-bit
+modes are fine. Everything at 320x200, 640x400, 640x480 and 800x600 in 8, 15 and 16 bit,
+and 640x480 in 24 bit, works on both outputs. The analog DAC is 6 bits per channel, so
+truecolor gradients show faint banding on the CRT that HDMI does not.
+
 **Will this go into z486 or ao486?**
 Maybe. This started as an experiment and we are happy with the result, but more
 testing by more people is needed first. Do not wait for pull requests: the code is

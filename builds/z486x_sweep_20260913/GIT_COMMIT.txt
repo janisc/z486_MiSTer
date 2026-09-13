@@ -1,0 +1,1 @@
+aaec6530556a3382b03944fa7f4054e801d7116f native fetcher: restart the 24bpp three-dot and 16bpp two-clock pixel phase at the first displayed dot of every line

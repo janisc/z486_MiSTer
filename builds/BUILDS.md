@@ -45,6 +45,7 @@ against a stock build of upstream `6075a33` on 2026-09-11:
 
 | Folder / rbf | Branch / commit | Contents | Status |
 |---|---|---|---|
+| `z486x_sweep_20260913` | `exp/vbe-sweep` `aaec653` | Release 8 + 24bpp: pixel phase restarted at the first displayed dot of every line (the 2384-dot line of mode 112h is not a multiple of 3, so the three-dot phase drifted two dots per line: static three-line zigzag in every vertical edge on the CRT, wavy text) + HDMI framebuffer width for 24bpp from the line stride. Found by a full VBETEST sweep (BIOS + UniVBE, webcam on the CRT, DOSBox-X S3 as reference). | regressions pass (text, STATTEST, VRAMTEST, DISP24, 320x200 flip, SP, Indy, Copper); 640x480x24 text/edges confirmed clean on the CRT by Jani; 800x600x24 still 1200 wide on HDMI (framework reads that buffer as 16bpp) |
 | `z486x_hidac_20260911` | `exp/hicolor-dac` `74490cc` | Always-native build + HiColor RAMDAC modelled on the Sierra SC15025 (hidden command register, extended-register protocol the Tseng BIOS probes and programs; `16/24bit mode` and `16bit format` OSD options removed, pel mask applied) + port 3CB bank bit for the second megabyte (reads back 11h, still an ET4000AX to probes) + native 320x200 hi-colour (halved dot clock: two clocks per dot and pixel) + display start latched at vertical retrace + HDMI framebuffer stride for those modes. Five builds: v1 armed protocol, v2 simplified (broke the BIOS's DAC identification: 16-bit modes as 5:5:5), v3 + 3CB + retrace latch (320x200 half width), v4 Sierra model + dot-clock stepping (320x200 blank: pixel enable stopped in blanking), v5 free-running dot phase (picture squashed into the top half: row pitch wrongly doubled after a misread register dump), v6 pitch = offset x 8 like every other mode. Release 8 candidate. | VBETEST 15/16/24-bit, 16-page flip on the CRT (webcam), Indy, SP, Copper, UniVBE identification |
 | `z486x_native_20260911` | `exp/always-native` `a9fcd38` | Release 7 + the analog port is always native: OSD `VGA Output` and `VSync` removed, no scaler request, no 60 Hz retiming; Border stays (applies to both outputs); MiSTer.ini `vga_scaler` / `vsync_adjust` / `direct_video` cover the exceptions (README). Release 8 candidate before the DAC work. | harness regressions pass; superseded by z486x_hidac_20260911 |
 | `z486x_latch_20260910` | `exp/crtc-line-latch` `a85a231` | 24bpp build + CRTC horizontal retrace start/end/skew latched at the end of each line (writes take effect next line, as on real ISA timing). | tested: harness regressions pass; Copper wobble on the CRT much better, some dark flashing top/bottom in the helicopter part remains |
@@ -61,6 +62,15 @@ against a stock build of upstream `6075a33` on 2026-09-11:
 | `z486x_et4k_20260909` | `exp/et4000-id` `d0242ae` | Release 3 + port 3CB reads FF so chip detectors (SciTech UniVBE/SDD, svgalib, VGAKIT) identify the card as an ET4000AX instead of falling through to "ET6000, not supported". | tested OK: UniVBE 5.3a and 6.7 now install (ET4000, 1 MB, VBE 2.0 banked); Steel Panthers still black (dynamic difference after mode set, unresolved) |
 
 ## Facts learned
+
+- VBETEST sweep 2026-09-13 (all modes, both outputs): every 1024x768 and 1280x1024 mode loses the
+  CRT because the core's clock table maps ET4000 clock index 2 to 32.5 MHz (a real board has 65 MHz
+  there: 24.5 kHz / 30 Hz instead of 48.4 kHz / 60 Hz); the 16-colour modes above 64 KB per plane
+  (1024x768, 1280x1024, big scroll buffers) wrap because the legacy VGA memory is 4 x 64 KB with a
+  16-bit raster address (ao486 heritage, stock identical; a real ET4000 has 256 KB per plane);
+  800x600x24 counts two bytes per dot and cannot reach a CRT line rate at 85 MHz; UniVBE's own
+  640x350/640x400x15 modes set the sequencer's dot clock divider and end at 15.7 kHz. The analog
+  DAC is 6 bits per channel: truecolor gradients band slightly on the CRT and not on HDMI.
 
 - The Tseng BIOS sizes video memory from CRTC 37h (bit 3 RAM chip size, bit 0 bus
   width, plus 32h bit 7): 2 MB on this core, stock included. Chip probes (svgalib,
