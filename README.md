@@ -35,10 +35,13 @@ does not take that. There is no multisync requirement and no OSD setting.
 
 **Can I use HDMI instead of, or together with, the VGA output?**
 Yes, both are always on. HDMI carries the scaler picture as on every core, the
-analog port the raster. The one catch is that DOS runs at 70 Hz: with
-`vsync_adjust=2` the HDMI output follows that, and some TVs and monitors refuse
-70 Hz. If HDMI stays blank, set `vsync_adjust=0` (the MiSTer default) or `1`; the
-scaler then frame-converts to 60 Hz. The analog output is not affected. A different
+analog port the raster. The one catch is that the raster now has its real refresh
+rate: 70 Hz in the 400-line DOS modes, 54 Hz in the BIOS's 800x600 modes (a 36 MHz
+clock, as on a real card of that class). The stock core's VSync option retimed
+everything to 60 Hz for HDMI; that option is gone. With `vsync_adjust=2` the HDMI
+output follows the real rate, and some TVs and monitors refuse 70 Hz. If HDMI stays
+blank, set `vsync_adjust=0` (the MiSTer default) or `1`; the scaler then
+frame-converts to 60 Hz. The analog output is not affected. A different
 thing is an HDMI picture that goes black while the OSD still draws: that was a bug in
 the framework's scaler after many video-mode changes, fixed upstream in August 2026 and
 carried in this core since release 9b (`z486nv_20260913b`).
