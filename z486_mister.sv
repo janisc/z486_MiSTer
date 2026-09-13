@@ -1061,6 +1061,8 @@ reg         fb_off;
 // give a 26.9 kHz line rate on the analog port, below the range of VGA monitors.
 // HDMI at a fixed 60 Hz is the framework's job (MiSTer.ini vsync_adjust=0).
 wire fb16        = ~vga_flags[2] && (vga_flags[1:0] == 2'd2);
+wire [20:0] fb_w24_mul = vga_stride * 21'd2731;
+wire [11:0] fb_width24 = {1'b0, fb_w24_mul[20:10]};   // 9-bit chars x 2731 fits 21 bits
 wire fb24        = ~vga_flags[2] && (vga_flags[1:0] == 2'd3);
 assign fb_bpp     = fb24 ? 2'd2 : fb16 ? 2'd1 : 2'd0;
 assign fb_native  = fb_en;
@@ -1073,7 +1075,12 @@ assign VGA_VS_POS = ~core_vs_neg;
 always @(posedge clk_sys) begin
 	fb_en       <= ~vga_flags[2] && |vga_flags[1:0];
 	fb_base     <= {4'h3, 6'b111110, vga_start_addr, 2'b00};
-	fb_width    <= (vga_flags[1:0] == 2'd3) ? 12'd640 : vga_flags[2] ? {vga_width, 2'b00} : {vga_width, 3'b000};
+	// 24bpp: three bytes per pixel, so the width in pixels is the line stride in
+	// bytes / 3 = offset x 8 / 3 (240 = 640, 300 = 800); x2731 >> 10 is 8/3 to
+	// within 0.1 for any offset. The CRTC dots are no guide here: the BIOS's
+	// 640x480x24 counts one byte per dot, its 800x600x24 two (a hard-coded 640
+	// showed 800x600x24 as a 1200-wide grey picture)
+	fb_width    <= (vga_flags[1:0] == 2'd3) ? fb_width24 : vga_flags[2] ? {vga_width, 2'b00} : {vga_width, 3'b000};
 	fb_stride   <= {vga_stride, 3'b000};
 	fb_height   <= vga_flags[3] ? {2'b0, vga_height[10:1]} : {1'b0, vga_height};   // undo vertical doublescan
 	fb_fmt[2:0] <= (vga_flags[1:0] == 2'd3) ? 3'b101 : (vga_flags[1:0] == 2'd2) ? 3'b100 : 3'b011; // 011=8bpp 100=16bpp 101=24bpp
