@@ -1,0 +1,1 @@
+e9082ee0569ef2eacff7726ccd148743aed86e67 vga: clock index 2 = 65 MHz in the framebuffer modes (1024x768 at 48.4 kHz / 60 Hz for the CRT instead of 24.5 kHz / 30 Hz)
