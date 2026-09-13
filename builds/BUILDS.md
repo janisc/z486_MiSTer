@@ -74,7 +74,8 @@ against a stock build of upstream `6075a33` on 2026-09-11:
   16-bit raster address (ao486 heritage, stock identical; a real ET4000 has 256 KB per plane);
   800x600x24 counts two bytes per dot and cannot reach a CRT line rate at 85 MHz; UniVBE's own
   640x350/640x400x15 modes set the sequencer's dot clock divider and end at 15.7 kHz. The analog
-  DAC is 6 bits per channel: truecolor gradients band slightly on the CRT and not on HDMI.
+  DAC of the original analog I/O board is 6 bits per channel (the board sold now has 8):
+  on the old board truecolor gradients band slightly on the CRT and not on HDMI.
 
 - The Tseng BIOS sizes video memory from CRTC 37h (bit 3 RAM chip size, bit 0 bus
   width, plus 32h bit 7): 2 MB on this core, stock included. Chip probes (svgalib,

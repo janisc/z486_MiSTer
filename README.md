@@ -117,8 +117,7 @@ also repeat the picture vertically: the legacy VGA memory is four 64 KB planes, 
 and ao486. 800x600 in 24 bit is beyond the analog port at the core's 85 MHz. UniVBE's own
 640x350 and 640x400 15-bit modes program a halved dot clock and run at 15.7 kHz; the BIOS's
 15-bit modes are fine. Everything at 320x200, 640x400, 640x480 and 800x600 in 8, 15 and 16
-bit, and 640x480 in 24 bit, works on both outputs. The analog DAC is 6 bits per channel, so
-truecolor gradients show faint banding on the CRT that HDMI does not.
+bit, and 640x480 in 24 bit, works on both outputs.
 
 **Will this go into z486 or ao486?**
 Maybe. This started as an experiment and we are happy with the result, but more
