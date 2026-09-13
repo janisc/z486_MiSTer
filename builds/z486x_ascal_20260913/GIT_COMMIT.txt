@@ -1,0 +1,1 @@
+2c3b68cacc0d125c321f245696f44f4fdfadf178 sys/ascal.vhd: upstream Template_MiSTer baaeff6, scaler output state reset at vsync
