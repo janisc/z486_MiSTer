@@ -29,7 +29,10 @@ Yes, both are always on. HDMI carries the scaler picture as on every core, the
 analog port the raster. The one catch is that DOS runs at 70 Hz: with
 `vsync_adjust=2` the HDMI output follows that, and some TVs and monitors refuse
 70 Hz. If HDMI stays blank, set `vsync_adjust=0` (the MiSTer default) or `1`; the
-scaler then frame-converts to 60 Hz. The analog output is not affected.
+scaler then frame-converts to 60 Hz. The analog output is not affected. A different
+thing is an HDMI picture that goes black while the OSD still draws: that was a bug in
+the framework's scaler after many video-mode changes, fixed upstream in August 2026 and
+carried in this core since release 9b (`z486nv_20260913b`).
 
 **There used to be a VSync option with Variable and 60 Hz. It is gone and my
 HDMI display shows no picture. Why, and what can I do?**
