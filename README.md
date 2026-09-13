@@ -13,9 +13,18 @@ over to the scaler.
 The changes are on branch `native-vga`; `main` tracks upstream. Experiments,
 including a parked real dot-clock PLL, are on `exp/*` branches. The rbf files of
 every build made along the way, with a description of each, are in
-[`builds/`](builds/BUILDS.md). Nothing here has been submitted upstream.
+[`builds/`](builds/BUILDS.md). Nothing here has been submitted upstream. The rbf of
+the current release is attached to the [Releases page](../../releases). The upstream
+README, unchanged, follows at the end of this file after the thanks.
 
 ## FAQ
+
+**Where do I get the core and how do I install it?**
+Download `z486nv_<date>.rbf` from the [Releases page](../../releases) and copy it to
+`/media/fat/_Computer`, next to the stock core if you keep one. Everything else is
+the stock core's: the boot ROMs and disk images in `/media/fat/games/Z486`, the SDRAM
+module, the MiSTer main version (see the upstream README at the end). Every build
+made along the way, with notes, is in [`builds/`](builds/BUILDS.md).
 
 **I use a VGA monitor. What do I need?**
 Connect it to the analog output and make sure MiSTer.ini has `composite_sync=0`.
@@ -115,6 +124,13 @@ here under the same terms as the files it lives in (the ao486 BSD licence for th
 video code, Apache 2.0 for the z486 CPU), so if you want it somewhere, take it
 there.
 
+The builds are named `z486nv_<date>` (nv for native video) so they sit next to the
+stock `z486_<date>.rbf` in `_Computer`; load whichever you want. Both report the same
+core name to MiSTer, so they share `config/Z486.CFG` (OSD settings, boot order, the
+mounted images), the `games/Z486` folder and the `[z486]` section of MiSTer.ini. The
+OSD's bottom line shows `nv-yymmdd` on this fork and nothing on the stock core, which
+is how you tell which one is loaded.
+
 ## How it works
 
 The analog VGA port always carries the core's own raster: the real 25.175 and
@@ -144,7 +160,25 @@ flipping is tear-free on the analog output. SciTech's VBETEST (in the SDD 5.3a
 package) exercises all of this and is the fork's regression suite for the SVGA
 framebuffer modes.
 
+## Thanks
+
+This fork exists because of other people's work:
+
+- **nand2mario** for the z486 CPU and the z486_MiSTer core, the platform all of this
+  runs on, and for keeping it moving.
+- **Aleksander Osman** for ao486, whose VGA and ET4000 model (`src/soc/vga.v`) is
+  what the native output extends.
+- **Alexey Melnikov (sorgelig)** and the MiSTer-devel contributors for the MiSTer
+  framework, the analog output path and the scaler integration, and **Till Harbaum**
+  for the origins of the HPS interface.
+- **TEMLIB** for the ascal scaler, including the August 2026 fix this fork carries.
+- SciTech's VBETEST, the DOSBox-X project and the CRT Terminator SCROLL tool did the
+  measuring and the reference work during testing.
+
 ---
+
+> **The original README.** Everything below is nand2mario's README of the upstream
+> core as it was when forked, kept unchanged.
 
 # z486 MiSTer core
 
