@@ -121,12 +121,18 @@ reg        y_par;       // buffer half of the line being displayed
 reg  [9:0] vis_line;    // index of the raster line being displayed
 reg  [2:0] byte_sel;    // 8bpp: byte of the buffer word for the current dot
 reg  [1:0] hw_sel;      // 16bpp: half-word of the buffer word for the current dot
-wire        px24_adv = (ph24 == 2'd0);                            // 24bpp: this dot starts a new pixel
+// The first displayed dot of every line starts pixel 0 with phase 0. The phase counters
+// run freely through blanking (the framework wants the pixel clock enable there), and a
+// line that is not a multiple of 3 (or 2) dots long would otherwise shift the pixel grid
+// by a dot or two on every line: a static three-line zigzag in every vertical edge of the
+// 24bpp picture (seen on the CRT in mode 112h, 2384 dots per line).
+wire        first_dot = ~not_displaying & nd_d;
+wire        px24_adv = (ph24 == 2'd0) | first_dot;                // 24bpp: this dot starts a new pixel
 wire  [9:0] px24_new = not_displaying ? 10'd0 : px24 + 1'd1;      // (blanking prefetches pixel 0)
 wire [11:0] b24_off  = {px24_new, 1'b0} + px24_new;              // 24bpp: byte offset of that pixel (3p)
 reg        nd_d, vs_d;
 reg         dot_ph;                                              // dotdiv: second clock of the dot
-wire        dot_adv = ~dotdiv | dot_ph;                          // this ce_pix starts a new dot
+wire        dot_adv = ~dotdiv | dot_ph | first_dot;              // this ce_pix starts a new dot
 wire [10:0] x_next = not_displaying ? 11'd0 : dot_adv ? x_cnt + 1'd1 : x_cnt;
 
 // fetch request to the engine (single entry; the engine latches it on accept)
@@ -181,9 +187,9 @@ always @(posedge clk) begin
 		if (ce_pix) begin
 			nd_d       <= not_displaying;
 			x_cnt      <= x_next;
-			dot_ph     <= ~dot_ph;                            // free-running like the VGA's own
-			                                                  // divided dot clock: the pixel clock
-			                                                  // enable must keep running in blanking
+			dot_ph     <= first_dot ? 1'b0 : ~dot_ph;         // free-running (the pixel clock enable
+			                                                  // must keep running in blanking), realigned
+			                                                  // at the first displayed dot of the line
 			case (bpp)
 				2'd1: begin                                   // 16bpp: 4 pixels per word
 					lb_rd_addr <= {y_par, x_next[10:2]};
@@ -194,9 +200,9 @@ always @(posedge clk) begin
 					// the 3-dot phase runs through blanking too (pixel clock enable every
 					// third dot for the framework); blanking parks the pixel at -1 and
 					// prefetches pixel 0 so the first displayed dot starts on pixel 0
-					ph24   <= (ph24 == 2'd2) ? 2'd0 : ph24 + 1'd1;
+					ph24   <= first_dot ? 2'd1 : (ph24 == 2'd2) ? 2'd0 : ph24 + 1'd1;
 					px24   <= not_displaying ? 10'h3FF : px24_adv ? px24_new : px24;
-					pix_ce <= (ph24 == 2'd0);
+					pix_ce <= px24_adv;
 					if (px24_adv) begin                       // word of byte 3p, then the next one
 						lb_rd_addr  <= {y_par, b24_off[11:3]};
 						b24_sel     <= b24_off[2:0];
