@@ -609,11 +609,18 @@ wire [27:0] pixclk_n24 = {crtc_horizontal_total + 9'd5, 3'b000} * 28'd31469;
 reg [31:0] pixcnt;
 reg [31:0] pix60;
 reg        old_sync;
+// ET4000 clock select {CRTC 34h[1], MISC[3:2]}: the BIOS uses 0 (25.175) and 1 (28.322)
+// for the VGA modes, 4 (36 MHz) for 800x600 and 2 for 1024x768. The clock chip is
+// board-specific; a board that runs 1024x768 non-interlaced at 60 Hz has 65 MHz at
+// index 2 (1328 dots x 806 lines x 60 Hz = 64.2 MHz). The legacy raster cannot run
+// that fast on the 85 MHz system clock, so the 65 MHz entry applies to the
+// framebuffer modes only (8/16bpp 1024x768: 105h, 116h, 117h), where the line fetcher
+// delivers the pixels; the planar 16-colour modes keep 32.5 MHz.
 always @(posedge clk_vga) begin
 	case(clock_select[3:0])
 		0 : pixclk_orig <= 28'd25175000;
 		1 : pixclk_orig <= 28'd28322000;
-		2 : pixclk_orig <= 28'd32514000;
+		2 : pixclk_orig <= fb_native ? 28'd65000000 : 28'd32514000;
 		default : pixclk_orig <= 28'd35900000;
 	endcase
 end
