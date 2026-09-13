@@ -97,14 +97,17 @@ reg [63:0] lb_wr_data;
 always @(posedge clk) if (lb_we) lb[lb_wr_addr_q] <= lb_wr_data;
 
 reg  [9:0] lb_rd_addr;
-reg [63:0] lb_rd_q;
-always @(posedge clk) lb_rd_q <= lb[lb_rd_addr];
+// Read data unregistered: valid in the cycle the address register updates. With
+// the 1024x768 modes at 65 MHz on the 85 MHz clock a dot can be a single clock,
+// and a registered output (one clock later) showed the previous word's byte at
+// every word boundary that fell on such a dot: one-pixel vertical spikes at
+// sloped edges on the CRT (HDMI reads the framebuffer and never saw them).
+wire [63:0] lb_rd_q = lb[lb_rd_addr];
 
 // 24bpp: second word of a straddling pixel, read the cycle after the first
 // (sequenced in the raster block below)
-reg        rd2_pending;   // issue the read of word+1 next cycle
-reg        rd2_capture;   // lb_rd_q holds the first word now: keep it
-reg        rd2_done;      // both words are in: assemble the colour
+reg        rd2_pending;   // first word on lb_rd_q now: keep it, address word+1
+reg        rd2_capture;   // second word on lb_rd_q now: assemble the colour
 reg [63:0] q0;            // first word of the pixel
 reg [23:0] rgb24;         // assembled 24bpp colour, stable for the whole pixel
 reg  [2:0] b24_sel;       // byte offset of the pixel in q0
@@ -153,22 +156,20 @@ always @(posedge clk) begin
 		x_cnt <= 0; y_par <= 0; vis_line <= 0; nd_d <= 1; vs_d <= 0; dot_ph <= 0;
 		req_valid <= 0; req_line1 <= 0; req_line <= 0; req_buf <= 0; start_lat <= 0;
 		lb_rd_addr <= 0; byte_sel <= 0; hw_sel <= 0; b24_sel <= 0;
-		rd2_pending <= 0; rd2_capture <= 0; rd2_done <= 0; rgb24 <= 0; px24 <= 10'h3FF; ph24 <= 0; pix_ce <= 1;
+		rd2_pending <= 0; rd2_capture <= 0; rgb24 <= 0; px24 <= 10'h3FF; ph24 <= 0; pix_ce <= 1;
 	end
 	else begin
 		vs_d <= vsync;
 
 		// 24bpp second-word read: the dot's ce (below) sets the first address and
-		// rd2_pending; the next cycle addresses word+1, the cycle after keeps the
-		// first word in q0 while lb_rd_q delivers the second
+		// rd2_pending; the next cycle the first word is on lb_rd_q (kept in q0) and
+		// word+1 is addressed; the cycle after, lb_rd_q delivers the second word
 		rd2_pending <= 0;
 		rd2_capture <= rd2_pending;
-		rd2_done    <= rd2_capture;
-		if (rd2_pending) lb_rd_addr <= lb_rd_addr + 1'd1;
-		if (rd2_capture) q0 <= lb_rd_q;
-		// registered once per pixel: at the doubled/tripled dot rate the next pixel's
-		// first word can land in lb_rd_q while this pixel is still being sampled
-		if (rd2_done) rgb24 <= fmt16[1] ? {p24[23:16], p24[15:8], p24[7:0]} : {p24[7:0], p24[15:8], p24[23:16]};
+		if (rd2_pending) begin lb_rd_addr <= lb_rd_addr + 1'd1; q0 <= lb_rd_q; end
+		// registered once per pixel: at the tripled dot rate the next pixel's first
+		// word can land on lb_rd_q while this pixel is still being sampled
+		if (rd2_capture) rgb24 <= fmt16[1] ? {p24[23:16], p24[15:8], p24[7:0]} : {p24[7:0], p24[15:8], p24[23:16]};
 
 		// engine accepted the current request (handled first: a new request
 		// raised in the same cycle below must win)
@@ -239,8 +240,9 @@ always @(posedge clk) begin
 end
 
 // The pixel for dot x is byte x[2:0] of buffer word x[10:3] (8bpp) or half-word
-// x[1:0] of word x[9:2] (16bpp). Address and select are registered at the
-// previous dot; the RAM read lands one clock later, and dots are >= 3 clocks apart.
+// x[1:0] of word x[9:2] (16bpp). Address and select are registered at the dot's
+// clock enable and the word is on lb_rd_q from that cycle on, so a dot may be a
+// single clock (65 MHz modes on the 85 MHz clock).
 assign pixel = lb_rd_q[byte_sel * 8 +: 8];
 assign rgb   = (bpp == 2'd2) ? rgb24 : rgb16(lb_rd_q[hw_sel * 16 +: 16]);
 
