@@ -84,22 +84,25 @@ missing, open an issue.
 **Which games and demos have been tested?**
 On the CRT: DOS text modes, Doom, Commander Keen (EGA), SimCity 2000 and Panzer
 General (640x480x256), Steel Panthers, Indiana Jones Desktop Adventures under
-Windows 3.1 (640x480 hi-colour), the demos Copper (per-line raster tricks) and
+Windows 3.1 (640x480 hi-colour), Scorched Earth 1.5 at 1024x768 (256 colours), the demos Copper (per-line raster tricks) and
 Legend, and SciTech's VBETEST in every colour depth including 16-page 320x200
 hi-colour page flipping. The test tools (register dumps, retrace counters, VRAM
 banking, a resident INT 10h logger) and the debug floppy are described in
 [`builds/BUILDS.md`](builds/BUILDS.md).
 
 **Which modes do not work on the CRT?**
-A full VBETEST sweep of every VBE mode found these limits. All 1024x768 and 1280x1024
-modes lose the CRT: the core knows four dot clocks and gives the ET4000's clock index 2
-32.5 MHz where a real board has 65 MHz, so their lines run below 30 kHz (HDMI shows
-them). The 16-colour modes above 64 KB per plane, 1024x768 and 1280x1024, also repeat
-the picture vertically: the legacy VGA memory is four 64 KB planes, as in stock and ao486.
-800x600 in 24 bit is beyond the analog port at the core's 85 MHz. UniVBE's own 640x350 and
-640x400 15-bit modes program a halved dot clock and run at 15.7 kHz; the BIOS's 15-bit
-modes are fine. Everything at 320x200, 640x400, 640x480 and 800x600 in 8, 15 and 16 bit,
-and 640x480 in 24 bit, works on both outputs. The analog DAC is 6 bits per channel, so
+A full VBETEST sweep of every VBE mode found these limits. 1280x1024 loses the CRT: this
+BIOS runs it interlaced from a 36 MHz clock, below 30 kHz (HDMI shows it). 1024x768 in 8 and
+15/16 bit works at 60 Hz (48 kHz): the core gives the ET4000's clock index 2 the 65 MHz a
+real 1024x768 board has, for these framebuffer modes only. At that rate the pixel widths
+alternate between one and two clocks of the core's 85 MHz, which shows as stair steps on
+one-pixel lines and not at all on game graphics (Scorched Earth at 1024x768). The 16-colour
+modes above 64 KB per plane, 1024x768 and 1280x1024, stay at 32.5 MHz (below 30 kHz) and
+also repeat the picture vertically: the legacy VGA memory is four 64 KB planes, as in stock
+and ao486. 800x600 in 24 bit is beyond the analog port at the core's 85 MHz. UniVBE's own
+640x350 and 640x400 15-bit modes program a halved dot clock and run at 15.7 kHz; the BIOS's
+15-bit modes are fine. Everything at 320x200, 640x400, 640x480 and 800x600 in 8, 15 and 16
+bit, and 640x480 in 24 bit, works on both outputs. The analog DAC is 6 bits per channel, so
 truecolor gradients show faint banding on the CRT that HDMI does not.
 
 **Will this go into z486 or ao486?**
