@@ -46,11 +46,11 @@ thing is an HDMI picture that goes black while the OSD still draws: that was a b
 the framework's scaler after many video-mode changes, fixed upstream in August 2026 and
 carried in this core since release 9b (`z486nv_20260913b`).
 
-**There used to be a VSync option with Variable and 60 Hz. It is gone and my
+**The stock core has a VSync option with 60 Hz and Variable. It is gone here and my
 HDMI display shows no picture. Why, and what can I do?**
-That option retimed the core's own dot clock to make the raster 60 Hz. That gave
-a 27 kHz line rate, which no VGA monitor accepts, so it could not stay once the
-analog port became the native one. `vsync_adjust=0` in MiSTer.ini gives the HDMI
+That option retimed the core's own dot clock to make the raster 60 Hz. That gives
+a 27 kHz line rate, which no VGA monitor accepts, so it has no place when the
+analog port carries the real timing. `vsync_adjust=0` in MiSTer.ini gives the HDMI
 output the same fixed 60 Hz, by frame conversion in the scaler, and the CRT keeps
 its real 70 Hz.
 
@@ -87,10 +87,10 @@ new core build over an old UniVBE setup, run UVCONFIG once: it caches what it
 detected, including the RAMDAC.
 
 **Some settings disappeared from the Audio & Video menu. Why?**
-Four options are gone: `VGA Output` and `VSync`, which switched the analog port to
-the scaler or retimed the raster and have no place when the port is always native,
-and `16/24bit mode` and `16bit format`, which asked the user to guess the pixel
-format of the hi-colour modes. The emulated RAMDAC now has the command register
+Compared with the stock core, three options are gone: `VSync`, which retimed the
+raster to 60 Hz and has no place when the analog port carries the real timing, and
+`16/24bit mode` and `16bit format`, which asked the user to guess the pixel format
+of the hi-colour modes. The emulated RAMDAC now has the command register
 the BIOS and the Windows driver program, so the format is whatever they set, as on
 a real card. `Border` stays and applies to both outputs. The aim was to remove
 combinations that did not make sense, not functionality; if something you need is
