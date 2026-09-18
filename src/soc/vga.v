@@ -86,6 +86,7 @@ module vga
 	input               vga_lores,
 	input               vga_border,
 	input               vga_vstretch,      // TV output: pad frames shorter than 524 rows to 524 (60 Hz at 31.5 kHz)
+	input               vga_vzoom,         // TV output: show every 5th display scanline twice (6/5 vertical zoom) when the picture is under 460 lines
 
 	// native SVGA (8bpp framebuffer) support: raster-stage timing out, fetched pixel in
 	output              vga_lf_ce,          // dot clock enable
@@ -1132,7 +1133,7 @@ always @(posedge clk_vga) if (ce_video) if(memory_load_step_pre_first) memory_ro
 reg memory_row_scan_double;
 always @(posedge clk_vga) if (ce_video) begin
 	if(crtc_vertical_doublescan && (dot_memory_load_first_in_frame || dot_memory_load_first_in_line_matched))  memory_row_scan_double <= 1'b1;
-	else if(crtc_vertical_doublescan && dot_memory_load_first_in_line)                                         memory_row_scan_double <= ~memory_row_scan_double;
+	else if(crtc_vertical_doublescan && dot_memory_load_first_in_line && ~vz_rep)                              memory_row_scan_double <= ~memory_row_scan_double;
 	else if(~(crtc_vertical_doublescan) || dot_memory_load_vertical_retrace_start)                             memory_row_scan_double <= 1'b0;
 end
 
@@ -1164,7 +1165,7 @@ reg [15:0] memory_address;
 always @(posedge clk_vga) if (ce_video) begin
 	if(dot_memory_load_first_in_line_matched)  memory_address <= 16'd0;
 	else if(dot_memory_load_first_in_frame)    memory_address <= memory_address_start_reg;
-	else if(dot_memory_load_first_in_line)     memory_address <= (memory_row_scan_double || memory_row_scan_reg < crtc_row_max) ? memory_start_line :
+	else if(dot_memory_load_first_in_line)     memory_address <= (vz_rep || memory_row_scan_double || memory_row_scan_reg < crtc_row_max) ? memory_start_line :
 	                                                                                                                              memory_start_line + { 6'd0, crtc_address_offset[8:0], 1'b0 };
 	else if(dot_memory_load)                   memory_address <= memory_address + 16'd1;
 end
@@ -1174,7 +1175,7 @@ always @(posedge clk_vga) if (ce_video) begin
 	if(dot_memory_load_first_in_line_matched)  memory_row_scan <= 5'd0;
 	else if(dot_memory_load_first_in_frame)    memory_row_scan <= (crtc_row_preset <= crtc_row_max) ?     crtc_row_preset : 
 	                                                                                                      5'd0;
-	else if(dot_memory_load_first_in_line)     memory_row_scan <= (memory_row_scan_double) ?              memory_row_scan_reg : 
+	else if(dot_memory_load_first_in_line)     memory_row_scan <= (vz_rep || memory_row_scan_double) ?    memory_row_scan_reg : 
 	                                                              (memory_row_scan_reg == crtc_row_max) ? 5'd0 : 
 	                                                                                                      memory_row_scan_reg + 5'd1;
 end
@@ -1574,7 +1575,16 @@ wire [10:0] vert_total_crtc = crtc_vertical_total  + VGA_V_TOTAL_EXTRA;
 // has 262 lines and a TV locks to it. Every programmed event (display end, blanking,
 // retrace) happens at its own row; only the wrap to row 0 comes later. Frames of
 // 524 rows or more (the 60 Hz 480-line modes, SVGA) are left alone.
-wire [10:0] vert_total     = (vga_vstretch && vert_total_crtc < 11'd523) ? 11'd523 : vert_total_crtc;
+// TV output "Fill": every 5th display scanline is shown twice (a 6/5 vertical zoom, 200 rows
+// into 240 TV lines) by holding the scanline counter and the memory fetch for one more
+// physical line. Only the legacy raster (not the framebuffer fetcher) and only pictures
+// under 460 lines; the 480-line modes fill a TV frame as they are. The padding above
+// counts the inserted lines so the frame still ends at 524 rows where there is room.
+wire        vz_active = vga_vzoom && (crtc_vertical_display_size < 11'd460) && ~fb_native && ~fb_native16;
+reg         vz_rep;        // the physical line in progress repeats the previous scanline
+reg   [2:0] vz_cnt;        // display scanlines mod 5
+reg   [7:0] vz_ins;        // lines inserted this frame
+wire [10:0] vert_total     = (vga_vstretch && (vert_total_crtc + vz_ins) < 11'd523) ? (11'd523 - vz_ins) : vert_total_crtc;
 wire        vert_stretch   = vert_cnt > vert_total_crtc;   // inside the padding: blanked, not overscan
 
 wire hde = horiz_cnt < crtc_horizontal_display_size;
@@ -1638,8 +1648,22 @@ end
 // vert_cnt (the scanline counter) is clocked by HSYNC
 always @(posedge clk_vga) if (ce_video) begin
 	if (character_last_dot && hss) begin
-		if (vert_last_cnt)        vert_cnt <= 11'd0;
-		else                      vert_cnt <= vert_cnt + 1'd1;
+		if (vert_last_cnt) begin
+			vert_cnt <= 11'd0;
+			vz_rep   <= 1'b0;
+			vz_cnt   <= 3'd0;
+			vz_ins   <= 8'd0;
+		end
+		else if (vz_active && vde && ~vz_rep && vz_cnt == 3'd4) begin
+			// hold: the next physical line shows this scanline again
+			vz_rep <= 1'b1;
+			vz_ins <= vz_ins + 1'd1;
+		end
+		else begin
+			vert_cnt <= vert_cnt + 1'd1;
+			vz_rep   <= 1'b0;
+			vz_cnt   <= (vz_cnt == 3'd4 || ~vde) ? 3'd0 : vz_cnt + 1'd1;
+		end
 	end
 end
 

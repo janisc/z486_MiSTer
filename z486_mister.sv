@@ -136,6 +136,7 @@ localparam CONF_STR = {
 	"P1OMN,Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
 	"P1O7,Analog output,VGA 31kHz,TV 15kHz;",
 	"P1OA,TV frame rate,60 Hz,Native;",
+	"P1OB,TV picture,Native size,Fill;",
 	"P1oM,Border,Yes,No;",
 	"P1-;",
 	"P1oP,FM mode,OPL3,OPL2 compatibility;",
@@ -738,6 +739,7 @@ system #(
 	.video_f60           (video_f60),
 	.video_border        (~status[54]),  // OSD "Border" (oM): show the overscan border (both outputs share one raster)
 	.video_vstretch      (tv15_en & ~status[10]),  // OSD "TV frame rate" (OA): 60 Hz pads 70 Hz frames to 524 rows in TV mode
+	.video_vzoom         (tv15_en & status[11]),   // OSD "TV picture" (OB): Fill = every 5th display scanline twice (200 rows into 240 TV lines)
 	.video_fb_native     (fb_native),
 	.video_fb_bpp        (fb_bpp),
 	.video_dac_565       (video_dac_565),

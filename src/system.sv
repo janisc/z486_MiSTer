@@ -140,6 +140,7 @@ module system (
 	input              video_f60,     // force VGA timing to 60 Hz; 0 preserves native refresh
 	input              video_border,	// show VGA overscan border (OSD)
 	input              video_vstretch,	// TV output: pad short frames to 524 rows (60 Hz)
+	input              video_vzoom,	// TV output: 6/5 vertical zoom (every 5th display scanline twice)
 	input              video_fb_native,	// native analog output of the 8/16bpp framebuffer modes
 	input        [1:0] video_fb_bpp,	// framebuffer depth: 0 = 8, 1 = 16, 2 = 24 bits per pixel
 	output             video_dac_565,	// 16bpp framebuffer is 5:6:5 (from the HiColor DAC command register)
@@ -1294,6 +1295,7 @@ vga vga_inst
 	.vga_lores         (1'b0),
 	.vga_border        (video_border),
 	.vga_vstretch      (video_vstretch),
+	.vga_vzoom         (video_vzoom),
 	.vga_lf_ce         (lf_ce),
 	.vga_lf_nd         (lf_nd),
 	.vga_lf_vsync      (lf_vsync),
