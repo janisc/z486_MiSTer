@@ -1575,6 +1575,7 @@ wire [10:0] vert_total_crtc = crtc_vertical_total  + VGA_V_TOTAL_EXTRA;
 // retrace) happens at its own row; only the wrap to row 0 comes later. Frames of
 // 524 rows or more (the 60 Hz 480-line modes, SVGA) are left alone.
 wire [10:0] vert_total     = (vga_vstretch && vert_total_crtc < 11'd523) ? 11'd523 : vert_total_crtc;
+wire        vert_stretch   = vert_cnt > vert_total_crtc;   // inside the padding: blanked, not overscan
 
 wire hde = horiz_cnt < crtc_horizontal_display_size;
 wire vde = vert_cnt <= crtc_vertical_display_size;
@@ -1812,10 +1813,10 @@ assign dot_memory_load_vertical_retrace_end   = ~(host_io_vertical_retrace) && h
 
 wire hide_overscan = ~vga_border;
 
-always @(posedge clk_vga) if (ce_video) vgareg_blank <= vgaprep_blank; // blanking gates DAC
+always @(posedge clk_vga) if (ce_video) vgareg_blank <= vgaprep_blank || vert_stretch; // blanking gates DAC
 
 reg vgareg_blank_n;
-always @(posedge clk_vga) if (ce_video) vgareg_blank_n <= ~(vgaprep_blank_no_wraparound || (hide_overscan && vgaprep_not_displaying)); // omit blanking wraparound to show top blanking as active display
+always @(posedge clk_vga) if (ce_video) vgareg_blank_n <= ~(vgaprep_blank_no_wraparound || vert_stretch || (hide_overscan && vgaprep_not_displaying)); // omit blanking wraparound to show top blanking as active display; the TV-mode padding rows are blank
 reg vga_blank_n_pre;
 always @(posedge clk_vga) if (ce_video) vga_blank_n_pre <= vgareg_blank_n;
 
