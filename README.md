@@ -68,9 +68,13 @@ black band above and below the picture. `Fill` shows every fifth scanline twice,
 200 rows become 240 lines and fill the screen, the same 1.2 stretch the scaler gives
 but with sharp lines; the SVGA framebuffer modes are left at native size. The picture
 is centred in the standard 240-line window; sets differ by ten lines or so in their
-own vertical centring, and with `Fill` the outermost lines fall into the set's
-overscan as they do with a console. HDMI keeps the normal 31 kHz picture at the same
-time (with `Fill` it shows the stretched frame too).
+own centring, so `TV H-position` and `TV V-position` nudge it by a microsecond or
+eight lines at a time. With `Fill` the outermost lines fall into the set's overscan
+as they do with a console. `TV hi-res modes` decides what happens to text and the
+640x400 and 640x480 modes: `Line drop` shows every other row progressively,
+`Interlace` shows all of them as two fields, the way a TV shows 480i, sharp but with
+the flicker that goes with it; the 200-row modes stay 240p either way. HDMI keeps the
+normal 31 kHz picture at the same time (with `Fill` it shows the stretched frame too).
 
 VGA's 200- and 400-line modes run at 70 Hz and consumer TVs lock to 50 or 60 Hz only.
 With the default `TV frame rate` of `60 Hz` the core pads those frames to 60 Hz;
