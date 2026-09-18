@@ -139,6 +139,7 @@ module system (
 	output wire [7:0]  video_b,
 	input              video_f60,     // force VGA timing to 60 Hz; 0 preserves native refresh
 	input              video_border,	// show VGA overscan border (OSD)
+	input              video_tvmode,	// TV output on
 	input              video_vstretch,	// TV output: pad short frames to 524 rows (60 Hz)
 	input              video_vzoom,	// TV output: 6/5 vertical zoom (every 5th display scanline twice)
 	input              video_vodd,	// TV output: odd row count (interlace)
@@ -1297,6 +1298,7 @@ vga vga_inst
 	.vga_off           (video_off),
 	.vga_lores         (1'b0),
 	.vga_border        (video_border),
+	.vga_tvmode        (video_tvmode),
 	.vga_vstretch      (video_vstretch),
 	.vga_vzoom         (video_vzoom),
 	.vga_vodd          (video_vodd),

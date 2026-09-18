@@ -46,7 +46,7 @@
 //    retrace), so the picture is centred in the TV's visible area from the
 //    measured frame length, picture height and picture position;
 //  * the horizontal sync and porches are generated here with TV widths
-//    (4.7 us sync, picture from 10 us), placed on the input's pixel enable so
+//    (4.7 us sync, picture from 11.3 us), placed on the input's pixel enable so
 //    the active picture is exactly twice the input's;
 //  * anything that cannot become a 15 kHz raster (line period outside 31.8 us
 //    +/- 5 %, frame outside 400..560 lines, no sync at all) switches the output
@@ -61,7 +61,7 @@ module vga_tv15 #(parameter CLK_RATE = 85000000)
 	input             clk,
 	input             reset,
 	input             enable,
-	input       [1:0] hpos,        // picture left edge: 0, +1, +2, -1 us
+	input       [1:0] hpos,        // picture left edge: 0, +0.5, -1, -2 us
 	input       [1:0] vpos,        // picture vertical position: 0, +8, +16, -8 lines
 	input             ilace_en,    // 400/480-row pictures as two interlaced fields instead of one line in two
 	input             doublescan,  // the VGA raster scans every row twice (200/240-row modes)
@@ -91,11 +91,13 @@ localparam LINE_HI   = LINE_NOM + LINE_NOM / 20;
 localparam LINES_LO  = 400;                           // lines per frame accepted
 localparam LINES_HI  = 560;                           // (449 at 70 Hz, 524/525 at 60 Hz)
 localparam HS_CYC    = CLK_RATE / 212766;             // 4.7 us sync
-localparam ACT_CYC   = CLK_RATE / 100000;             // picture starts 10 us after sync start
+localparam ACT_CYC   = (CLK_RATE / 10000) * 113 / 1000;  // picture starts 11.3 us after sync start: a 640-pixel
+                                                      // line (50.8 us) then ends 1.5 us before the next sync, and
+                                                      // the left edge clears the overscan of most sets
 localparam US_CYC    = CLK_RATE / 1000000;            // one microsecond
 localparam VS_LINES  = 6;                             // output vsync: 6 input lines = 3 output lines
 localparam SAFE_LINE = CLK_RATE / 15734;              // self-timed raster: 15.734 kHz
-localparam SAFE_ACT1 = ACT_CYC + CLK_RATE / 19231;    // 52 us of picture
+localparam SAFE_ACT1 = ACT_CYC + CLK_RATE / 20000;    // 50 us of picture
 localparam SAFE_LINES = 262;                          // 60.05 Hz
 localparam SAFE_V0   = 20;                            // picture lines 20..259
 localparam SAFE_V1   = 260;
@@ -178,9 +180,9 @@ reg [12:0] act_cyc;
 reg [10:0] vofs;
 always @(posedge clk) begin
 	case (hpos)
-		2'd1: act_cyc <= ACT_CYC[12:0] + US_CYC[12:0];
-		2'd2: act_cyc <= ACT_CYC[12:0] + 2 * US_CYC[12:0];
-		2'd3: act_cyc <= ACT_CYC[12:0] - US_CYC[12:0];
+		2'd1: act_cyc <= ACT_CYC[12:0] + US_CYC[12:0] / 2;
+		2'd2: act_cyc <= ACT_CYC[12:0] - US_CYC[12:0];
+		2'd3: act_cyc <= ACT_CYC[12:0] - 2 * US_CYC[12:0];
 		default: act_cyc <= ACT_CYC[12:0];
 	endcase
 	case (vpos)                                        // in input lines (two per output line)

@@ -137,7 +137,7 @@ localparam CONF_STR = {
 	"P1O7,Analog output,VGA 31kHz,TV 15kHz;",
 	"P1OA,TV frame rate,60 Hz,Native;",
 	"P1OB,TV picture,Native size,Fill;",
-	"P1OEF,TV H-position,0,+1us,+2us,-1us;",
+	"P1OEF,TV H-position,0,+0.5us,-1us,-2us;",
 	"P1OGH,TV V-position,0,+8,+16,-8;",
 	"P1O[24],TV hi-res modes,Line drop,Interlace;",
 	"P1oM,Border,Yes,No;",
@@ -743,6 +743,7 @@ system #(
 	.video_b             (core_b),
 	.video_f60           (video_f60),
 	.video_border        (~status[54]),  // OSD "Border" (oM): show the overscan border (both outputs share one raster)
+	.video_tvmode        (tv15_en),
 	.video_vstretch      (tv15_en & ~status[10]),  // OSD "TV frame rate" (OA): 60 Hz pads 70 Hz frames to 524 rows in TV mode
 	.video_vzoom         (tv15_en & status[11]),   // OSD "TV picture" (OB): Fill = every 5th display scanline twice (200 rows into 240 TV lines)
 	.video_vodd          (tv_ilace),                // the TV stage interlaces this picture: odd row count

@@ -85,6 +85,7 @@ module vga
 
 	input               vga_lores,
 	input               vga_border,
+	input               vga_tvmode,        // TV output on: overscan border hidden, rows from the retrace start blanked
 	input               vga_vstretch,      // TV output: pad frames shorter than 524 rows to 524 (60 Hz at 31.5 kHz)
 	input               vga_vzoom,         // TV output: show every 5th display scanline twice (6/5 vertical zoom) when the picture is under 460 lines
 	input               vga_vodd,          // TV output: make the padded frame an odd number of rows (interlace) instead of even
@@ -1596,7 +1597,7 @@ wire [10:0] vert_total     = (vga_vstretch && (vert_par_even == vga_vodd)) ? ver
 // blanked, overscan rows included: the TV stage centres the picture from the run of lines
 // with DE, and the bottom overscan rows would otherwise start that run 75 padding rows
 // too early. Guarded so a retrace programmed inside the display area cannot cut the picture.
-wire        vert_stretch   = vga_vstretch && (vert_cnt >= crtc_vertical_retrace_start) && (vert_cnt > crtc_vertical_display_size);
+wire        vert_stretch   = vga_tvmode && (vert_cnt >= crtc_vertical_retrace_start) && (vert_cnt > crtc_vertical_display_size);
 
 wire hde = horiz_cnt < crtc_horizontal_display_size;
 wire vde = vert_cnt <= crtc_vertical_display_size;
@@ -1846,7 +1847,9 @@ assign dot_memory_load_vertical_retrace_end   = ~(host_io_vertical_retrace) && h
 
 //------------------------------------------------------------------------------ vga output
 
-wire hide_overscan = ~vga_border;
+// TV output: the overscan border has no place in a TV raster (its 8 dots a side would push
+// the 640-pixel line into the sync), so it is hidden whatever the Border option says.
+wire hide_overscan = ~vga_border || vga_tvmode;
 
 always @(posedge clk_vga) if (ce_video) vgareg_blank <= vgaprep_blank || vert_stretch; // blanking gates DAC
 
