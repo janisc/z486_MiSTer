@@ -38,8 +38,13 @@
 //    so they come out complete: real 240p. The 400/480/350-line modes lose every
 //    other row, which is readable and the best a 15 kHz display can show
 //    progressively;
-//  * the frame rate is the software's (70 or 60 Hz); the line phase restarts at
-//    every vertical sync so the picture is progressive, not interlaced;
+//  * the frame rate is the software's (70 or 60 Hz, or 60 Hz when the CRTC pads
+//    its frame in TV mode); the picture is progressive: the line phase restarts
+//    at every output vsync;
+//  * the output vsync is placed by this stage, not by the VGA timing: VGA puts
+//    the picture 17 lines after its vsync, a TV needs about 21 (its vertical
+//    retrace), so the picture is centred in the TV's visible area from the
+//    measured frame length, picture height and picture position;
 //  * the horizontal sync and porches are generated here with TV widths
 //    (4.7 us sync, picture from 10 us), placed on the input's pixel enable so
 //    the active picture is exactly twice the input's;
@@ -79,7 +84,7 @@ localparam LINE_NOM  = CLK_RATE / 31469;              // 31.469 kHz VGA line, cl
 localparam LINE_LO   = LINE_NOM - LINE_NOM / 20;      // +/- 5 %
 localparam LINE_HI   = LINE_NOM + LINE_NOM / 20;
 localparam LINES_LO  = 400;                           // lines per frame accepted
-localparam LINES_HI  = 560;                           // (449 at 70 Hz, 525 at 60 Hz)
+localparam LINES_HI  = 560;                           // (449 at 70 Hz, 524/525 at 60 Hz)
 localparam HS_CYC    = CLK_RATE / 212766;             // 4.7 us sync
 localparam ACT_CYC   = CLK_RATE / 100000;             // picture starts 10 us after sync start
 localparam VS_LINES  = 6;                             // output vsync: 6 input lines = 3 output lines
@@ -104,14 +109,13 @@ end
 // ---------------------------------------------------------------- measurement
 // Line period in clocks and lines per frame, judged at every vsync for the
 // frame that just ended; two good frames in a row switch the conversion on,
-// one bad frame or a missing sync switches it off.
+// one bad line, one bad frame or a missing sync switches it off.
 reg [15:0] cyc_cnt;
 reg [15:0] line_min, line_max;
 reg [10:0] frame_lines;
 reg [23:0] frame_cyc;
 reg  [1:0] ok_cnt;
 reg        convert;
-reg        vs_pending;
 
 wire frame_ok = (line_min >= LINE_LO[15:0]) && (line_max <= LINE_HI[15:0]) &&
                 (frame_lines >= LINES_LO[10:0]) && (frame_lines <= LINES_HI[10:0]);
@@ -163,6 +167,82 @@ always @(posedge clk) begin
 	end
 end
 
+// ---------------------------------------------------------------- vertical placement
+// Per frame: lines from the input vsync to the first picture line (first_de),
+// picture lines (de_lines), lines per frame (F). The output vsync goes
+// delay = (first_de - target) mod F input lines after the input vsync, with
+// target = 0.539 F - de_lines / 2: the picture centred in the 240 visible lines
+// of a 262-line frame after a 21-line vertical retrace, expressed as fractions
+// of the frame so a 70 Hz frame on a monitor that takes it is placed the same.
+// The delay computed from one frame places the vsync of the next.
+reg [10:0] first_de, de_lines, first_de_l, de_lines_l, frame_l;
+reg        de_in_line, de_seen;
+reg [18:0] mul;
+reg [10:0] target;
+reg [10:0] dlt, dlt_f;
+reg  [2:0] calc;
+reg [10:0] delay_reg;
+reg [10:0] vs_wait;
+reg        armed;
+reg        fire;
+
+always @(posedge clk) begin
+	fire <= 0;
+	if (reset) begin
+		first_de   <= 0;
+		de_lines   <= 0;
+		de_in_line <= 0;
+		de_seen    <= 0;
+		calc       <= 0;
+		delay_reg  <= 0;
+		vs_wait    <= 0;
+		armed      <= 0;
+	end
+	else begin
+		if (de) de_in_line <= 1;
+		if (hs_rise) begin
+			de_in_line <= 0;
+			if (de_in_line) begin
+				de_lines <= de_lines + 1'd1;
+				if (~de_seen) begin
+					de_seen  <= 1;
+					first_de <= frame_lines;
+				end
+			end
+			// the vsync of this frame, from the previous frame's placement
+			if (vs_rise) begin
+				if (delay_reg == 0) fire <= 1;
+				else begin
+					vs_wait <= delay_reg - 1'd1;
+					armed   <= 1;
+				end
+			end
+			else if (armed) begin
+				if (vs_wait == 0) begin
+					fire  <= 1;
+					armed <= 0;
+				end
+				else vs_wait <= vs_wait - 1'd1;
+			end
+		end
+		if (vs_rise) begin
+			frame_l    <= frame_lines + (hs_rise ? 1'd1 : 1'd0);
+			de_lines_l <= de_lines + ((de_in_line & hs_rise) ? 1'd1 : 1'd0);
+			first_de_l <= de_seen ? first_de : 11'd0;
+			de_lines   <= 0;
+			de_seen    <= 0;
+			calc       <= 3'd1;
+		end
+		else case (calc)
+			3'd1: begin mul <= frame_l * 8'd138; calc <= 3'd2; end
+			3'd2: begin target <= (mul[18:8] > {1'b0, de_lines_l[10:1]}) ? mul[18:8] - {1'b0, de_lines_l[10:1]} : 11'd0; calc <= 3'd3; end
+			3'd3: begin dlt <= first_de_l - target; dlt_f <= first_de_l - target + frame_l; calc <= 3'd4; end
+			3'd4: begin delay_reg <= (de_lines_l == 0) ? 11'd0 : (first_de_l >= target) ? dlt : dlt_f; calc <= 3'd0; end
+			default: ;
+		endcase
+	end
+end
+
 // ---------------------------------------------------------------- line store
 // Two lines of 1024 pixels: one being captured, one being replayed.
 reg [23:0] lb [0:2047];
@@ -173,20 +253,19 @@ reg        rep_buf;        // half handed over to the replay
 reg [10:0] cap_len;        // pixels captured in that line
 reg        out_start;      // an output line begins now
 reg  [2:0] vs_lines;       // output vsync countdown, in input lines
+reg        hs_rise_d;      // hs_rise delayed to line up with fire
 
 always @(posedge clk) begin
 	out_start <= 0;
+	hs_rise_d <= hs_rise;
 	if (reset) begin
-		cap_phase  <= 0;
-		cap_buf    <= 0;
-		cap_idx    <= 0;
-		vs_lines   <= 0;
-		vs_pending <= 0;
+		cap_phase <= 0;
+		cap_buf   <= 0;
+		cap_idx   <= 0;
+		vs_lines  <= 0;
 	end
 	else begin
-		if (vs_rise & ~hs_rise) vs_pending <= 1;
-		if (hs_rise) begin
-			vs_pending <= 0;
+		if (hs_rise_d) begin
 			if (cap_phase) begin
 				// the line that just ended was captured: replay it from now
 				cap_len   <= {1'b0, cap_idx};
@@ -195,9 +274,9 @@ always @(posedge clk) begin
 				out_start <= 1;
 			end
 			cap_idx <= 0;
-			// restart the line phase at vsync: the line starting now is captured
-			cap_phase <= (vs_rise | vs_pending) ? 1'b1 : ~cap_phase;
-			if (vs_rise | vs_pending) vs_lines <= VS_LINES[2:0];
+			// restart the line phase at the output vsync: the line starting now is captured
+			cap_phase <= fire ? 1'b1 : ~cap_phase;
+			if (fire) vs_lines <= VS_LINES[2:0];
 			else if (vs_lines != 0) vs_lines <= vs_lines - 1'd1;
 		end
 		if (ce & de & cap_phase) begin

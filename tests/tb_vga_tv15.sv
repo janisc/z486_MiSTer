@@ -79,6 +79,7 @@ integer expected_period;         // 2 x input line in clocks
 integer lines_per_frame_last = 0;
 integer bad_period_val = 0;
 integer debug_prints = 0;
+integer pic_top = -1, pic_top_last = -1, lines_since_ovs = 0;
 reg     de_seen_this_line = 0;
 
 always @(posedge clk) begin
@@ -91,10 +92,13 @@ always @(posedge clk) begin
 	if (alt_vs & ~avs_r) begin
 		alt_vs_count <= alt_vs_count + 1;
 		lines_per_frame_last <= alt_lines;
+		lines_since_ovs <= 0;
+		pic_top <= -1;
 		if (debug_prints < 12) begin debug_prints <= debug_prints + 1; $display("  t=%0t output vsync after %0d lines, convert=%0d", $time, alt_lines, dut.convert); end
 	end
 	if (alt_hs & ~ahs_r) begin
 		alt_lines <= (alt_vs & ~avs_r) ? 1 : alt_lines + 1;
+		lines_since_ovs <= (alt_vs & ~avs_r) ? 1 : lines_since_ovs + 1;
 		// classify the period that just ended
 		if (cyc > expected_period - 6 && cyc < expected_period + 6) hs_periods_ok <= hs_periods_ok + 1;
 		else if (cyc > expected_period / 2 - 6 && cyc < expected_period / 2 + 6) hs_periods_short <= hs_periods_short + 1;
@@ -111,6 +115,7 @@ always @(posedge clk) begin
 	if (alt_de & ~ade_r) begin
 		g_steps <= 0;
 		de_clk  <= 1;
+		if (pic_top < 0) begin pic_top <= lines_since_ovs; pic_top_last <= lines_since_ovs; end
 		if (dut.convert && alt_g != 0) begin
 			pix_errors <= pix_errors + 1;
 			if (pix_errors < 5) $display("FAIL: picture starts with g=%0d (expected 0)", alt_g);
@@ -144,6 +149,12 @@ task set_mode13h;
 		pixclk = 25175000;
 	end
 endtask
+task set_mode13h_stretched;   // the CRTC's TV-mode frame: 524 rows, 60.05 Hz
+	begin
+		set_mode13h;
+		vtotal = 524;
+	end
+endtask
 task set_mode_800x600;
 	begin
 		htotal = 1056; hde = 800; hs0 = 840; hs1 = 968;
@@ -171,8 +182,8 @@ initial begin
 	expected_period = 2 * 2701;
 	repeat (100) @(posedge clk);
 	reset = 0;
-	wait_frames(4);                         // measurement settles, two good frames
-	if (!dut.convert) begin $display("FAIL: conversion not enabled after 4 frames"); errors = errors + 1; end
+	wait_frames(6);                         // measurement and placement settle
+	if (!dut.convert) begin $display("FAIL: conversion not enabled after 6 frames"); errors = errors + 1; end
 	@(posedge vs); @(posedge clk); @(posedge clk);
 	clear_stats;
 	wait_frames(3);
@@ -189,6 +200,23 @@ initial begin
 	if (de_width_min < exp_de_min || de_width_max > exp_de_max || de_width_max - de_width_min > 8) begin $display("FAIL: picture width"); errors = errors + 1; end
 	if (pix_errors != 0) errors = errors + 1;
 	if (lines_per_frame_last < 224 || lines_per_frame_last > 226) begin $display("FAIL: lines per frame %0d", lines_per_frame_last); errors = errors + 1; end
+	$display("mode 13h: picture top %0d output lines after the output vsync (expected 21..24)", pic_top_last);
+	if (pic_top_last < 20 || pic_top_last > 24) begin $display("FAIL: picture placement"); errors = errors + 1; end
+
+	// the CRTC's padded 524-row frame (TV frame rate = 60 Hz): 262 lines, no short line, picture centred
+	set_mode13h_stretched;
+	wait_frames(3);
+	@(posedge vs); @(posedge clk); @(posedge clk);
+	clear_stats;
+	wait_frames(3);
+	@(posedge clk); @(posedge clk);
+	$display("524 rows: alt line periods ok=%0d short=%0d bad=%0d, alt vsyncs=%0d for %0d input frames, picture lines=%0d, lines/frame=%0d, picture top %0d (expected 41), pixel errors=%0d",
+	         hs_periods_ok, hs_periods_short, hs_periods_bad, alt_vs_count, in_vs_count, de_lines, lines_per_frame_last, pic_top_last, pix_errors);
+	if (hs_periods_bad != 0 || hs_periods_short != 0) begin $display("FAIL: 524-row line periods"); errors = errors + 1; end
+	if (lines_per_frame_last != 262) begin $display("FAIL: 524-row lines per frame %0d", lines_per_frame_last); errors = errors + 1; end
+	if (de_lines != 200 * in_vs_count || alt_vs_count != in_vs_count) begin $display("FAIL: 524-row picture/vsync count"); errors = errors + 1; end
+	if (pic_top_last < 40 || pic_top_last > 43) begin $display("FAIL: 524-row picture placement"); errors = errors + 1; end
+	if (pix_errors != 0) errors = errors + 1;
 
 	// switch to a mode that cannot be shown: expect the safe raster within a few frames
 	set_mode_800x600;

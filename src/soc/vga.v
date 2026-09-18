@@ -85,6 +85,7 @@ module vga
 
 	input               vga_lores,
 	input               vga_border,
+	input               vga_vstretch,      // TV output: pad frames shorter than 524 rows to 524 (60 Hz at 31.5 kHz)
 
 	// native SVGA (8bpp framebuffer) support: raster-stage timing out, fetched pixel in
 	output              vga_lf_ce,          // dot clock enable
@@ -1567,7 +1568,13 @@ reg  [8:0] horiz_cnt;
 reg [10:0] vert_cnt;
 
 wire  [8:0] horiz_total    = crtc_horizontal_total + VGA_H_TOTAL_EXTRA;
-wire [10:0] vert_total     = crtc_vertical_total   + VGA_V_TOTAL_EXTRA;
+wire [10:0] vert_total_crtc = crtc_vertical_total  + VGA_V_TOTAL_EXTRA;
+// TV output: a 449-row (70 Hz) frame is padded with blank overscan rows to 524 rows,
+// 60.05 Hz at the unchanged 31.47 kHz line rate, so the 15 kHz raster made from it
+// has 262 lines and a TV locks to it. Every programmed event (display end, blanking,
+// retrace) happens at its own row; only the wrap to row 0 comes later. Frames of
+// 524 rows or more (the 60 Hz 480-line modes, SVGA) are left alone.
+wire [10:0] vert_total     = (vga_vstretch && vert_total_crtc < 11'd523) ? 11'd523 : vert_total_crtc;
 
 wire hde = horiz_cnt < crtc_horizontal_display_size;
 wire vde = vert_cnt <= crtc_vertical_display_size;

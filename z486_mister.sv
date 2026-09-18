@@ -135,6 +135,7 @@ localparam CONF_STR = {
 	"P1-;",
 	"P1OMN,Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
 	"P1O7,Analog output,VGA 31kHz,TV 15kHz;",
+	"P1OA,TV frame rate,60 Hz,Native;",
 	"P1oM,Border,Yes,No;",
 	"P1-;",
 	"P1oP,FM mode,OPL3,OPL2 compatibility;",
@@ -223,6 +224,7 @@ wire        ps2_mouse_clk_in;
 wire        ps2_mouse_data_in;
 
 wire        core_ce_pixel;
+wire        tv15_en = status[7];   // OSD "Analog output" = TV 15kHz
 wire        core_hs_neg;
 wire        core_vs_neg;
 wire  [7:0] core_r;
@@ -735,6 +737,7 @@ system #(
 	.video_b             (core_b),
 	.video_f60           (video_f60),
 	.video_border        (~status[54]),  // OSD "Border" (oM): show the overscan border (both outputs share one raster)
+	.video_vstretch      (tv15_en & ~status[10]),  // OSD "TV frame rate" (OA): 60 Hz pads 70 Hz frames to 524 rows in TV mode
 	.video_fb_native     (fb_native),
 	.video_fb_bpp        (fb_bpp),
 	.video_dac_565       (video_dac_565),
@@ -1050,7 +1053,7 @@ assign VGA_DISABLE   = 1'b0;
 // analog port only, made from the primary one by vga_tv15 (one VGA line in two,
 // played at half the dot rate). The scaler keeps the 31 kHz raster, so HDMI is
 // unchanged. Sync polarity on the port is fixed negative in that mode.
-wire tv15_en = status[7];
+
 vga_tv15 #(.CLK_RATE(CLOCK_RATE_HZ)) vga_tv15
 (
 	.clk                (clk_sys),
