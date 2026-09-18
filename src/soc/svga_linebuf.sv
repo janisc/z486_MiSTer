@@ -67,6 +67,7 @@ module svga_linebuf
 	input             not_displaying,  // 1 outside the display window (border, blank, sync)
 	input             vsync,           // vertical sync (level, active high)
 	input             doublescan,      // each framebuffer line is displayed twice
+	input             rep2,            // TV zoom: raster line n+2 repeats n+1 (sampled at the end of line n)
 	input             dotdiv,          // sequencer dot clock divided by two: a dot lasts two ce_pix
 	input      [19:0] start_addr,      // CRTC start address (4-byte units)
 	input       [8:0] stride_words,    // CRTC offset register = line stride in 64-bit words
@@ -149,7 +150,9 @@ reg [19:0] start_lat;   // start address latched at vertical retrace start, as t
 
 wire       vs_start = vsync & ~vs_d;
 wire       line_end = ce_pix & not_displaying & ~nd_d;   // display window just closed
-wire [9:0] line_n2  = vis_line + 2'd2;
+// vis_line counts the raster lines whose fetch has been requested, as framebuffer
+// (logical) lines: a repeated raster line does not advance it
+wire [9:0] line_n2  = rep2 ? vis_line + 1'd1 : vis_line + 2'd2;
 
 always @(posedge clk) begin
 	if (reset | ~enable) begin
@@ -222,7 +225,7 @@ always @(posedge clk) begin
 				req_line  <= doublescan ? {1'b0, line_n2[9:1]} : line_n2;
 				req_buf   <= y_par;
 				y_par     <= ~y_par;
-				vis_line  <= vis_line + 1'd1;
+				if (~rep2) vis_line <= vis_line + 1'd1;
 			end
 		end
 
