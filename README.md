@@ -63,14 +63,14 @@ lasts 31.8 us whatever the mode, so one line played out over the time of two is 
 modes, which VGA scans twice, come out complete as true 240p: Doom, the LucasArts and
 Sierra adventures, Keen. Text and the 640x400 and 640x480 modes lose every other row
 and are readable rather than pretty. With `TV picture` at `Native size` nothing is
-scaled: 200 rows are 200 TV lines, a little less than a console's 240, so there is a
+scaled: 200 rows are 200 TV lines, a little less than the 240 a TV shows, so there is a
 black band above and below the picture. `Fill` shows every fifth scanline twice, so
 200 rows become 240 lines and fill the screen, the same 1.2 stretch the scaler gives
 but with sharp lines; the SVGA framebuffer modes are left at native size. The picture
 is centred in the standard 240-line window; sets differ in their own centring, so
 `TV H-position` and `TV V-position` nudge it in steps of half a microsecond and four
-lines. The TV options only appear in the menu while the analog output is set to TV. With `Fill` the outermost lines fall into the set's overscan
-as they do with a console. `TV hi-res modes` decides what happens to text and the
+lines. The TV options only appear in the menu while the analog output is set to TV. With `Fill` the outermost lines fall into the set's overscan.
+`TV hi-res modes` decides what happens to text and the
 640x400 and 640x480 modes: `Line drop` shows every other row progressively,
 `Interlace` shows all of them as two fields, the way a TV shows 480i, sharp but with
 the flicker that goes with it; the 200-row modes stay 240p either way. HDMI keeps the
@@ -83,7 +83,7 @@ it did with the stock core's old VSync 60Hz option. Arcade monitors and PVMs tha
 70 Hz can use `Native`. Modes the set cannot show, 800x600 and up and UniVBE's 35 Hz
 modes, turn the screen dark green until the software returns to a supported mode; the
 OSD still works on it. A few characters cut off at the left and right are the set's
-overscan, as with any console.
+overscan.
 
 The scaler is the alternative if you want the screen filled: it scales the picture to
 240 lines and frame-converts 70 Hz to 60 with a dropped frame now and then:
