@@ -1,1 +1,1 @@
-9bc6698b374fd874cb6ccf508f42ee39b87c7535 TV output: vsync aligned to an output line, H/V position offsets, interlace for the hi-res modes
+a7b4a652efc7599dbc721bc3d199c6f5fc4a2593 TV output: picture starts 11.3 us after sync, overscan border hidden in TV mode
