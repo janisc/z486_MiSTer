@@ -25,6 +25,13 @@ module emu
 	output        VGA_DISABLE,
 	output        VGA_HS_POS,   // analog output only: 1 = positive-going hsync (default negative)
 	output        VGA_VS_POS,   // analog output only: 1 = positive-going vsync (default negative)
+	output        VGA_ALT_EN,   // analog output only: 1 = the analog port carries the raster below instead (15 kHz TV)
+	output  [7:0] VGA_ALT_R,
+	output  [7:0] VGA_ALT_G,
+	output  [7:0] VGA_ALT_B,
+	output        VGA_ALT_HS,   // active-high pulses, as the framework normalizes VGA_HS/VS
+	output        VGA_ALT_VS,
+	output        VGA_ALT_DE,
 
 	input  [11:0] HDMI_WIDTH,
 	input  [11:0] HDMI_HEIGHT,
@@ -127,6 +134,7 @@ localparam CONF_STR = {
 	"P1,Audio & Video;",
 	"P1-;",
 	"P1OMN,Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
+	"P1O7,Analog output,VGA 31kHz,TV 15kHz;",
 	"P1oM,Border,Yes,No;",
 	"P1-;",
 	"P1oP,FM mode,OPL3,OPL2 compatibility;",
@@ -1037,6 +1045,32 @@ assign VGA_DE        = gamma_de;
 assign VGA_F1        = 1'b0;
 assign VGA_SL        = 2'b00;
 assign VGA_DISABLE   = 1'b0;
+
+// 15 kHz TV output (OSD "Analog output" = TV 15kHz): a second raster for the
+// analog port only, made from the primary one by vga_tv15 (one VGA line in two,
+// played at half the dot rate). The scaler keeps the 31 kHz raster, so HDMI is
+// unchanged. Sync polarity on the port is fixed negative in that mode.
+wire tv15_en = status[7];
+vga_tv15 #(.CLK_RATE(CLOCK_RATE_HZ)) vga_tv15
+(
+	.clk                (clk_sys),
+	.reset              (reset_sync_r[2]),
+	.enable             (tv15_en),
+	.ce                 (core_ce_pixel),
+	.r                  (VGA_R),
+	.g                  (VGA_G),
+	.b                  (VGA_B),
+	.hs                 (gamma_hs),
+	.vs                 (gamma_vs),
+	.de                 (gamma_de),
+	.alt_en             (VGA_ALT_EN),
+	.alt_r              (VGA_ALT_R),
+	.alt_g              (VGA_ALT_G),
+	.alt_b              (VGA_ALT_B),
+	.alt_hs             (VGA_ALT_HS),
+	.alt_vs             (VGA_ALT_VS),
+	.alt_de             (VGA_ALT_DE)
+);
 assign HDMI_FREEZE   = 1'b0;
 assign HDMI_BLACKOUT = 1'b0;
 assign HDMI_BOB_DEINT = 1'b0;
@@ -1070,8 +1104,8 @@ assign VGA_SCALER = 1'b0;
 assign video_f60  = 1'b0;
 // Real VGA sync polarity on the analog port (400-line modes H-/V+, 350-line H+/V-,
 // 480-line H-/V-), so multisync monitors pick the right preset.
-assign VGA_HS_POS = ~core_hs_neg;
-assign VGA_VS_POS = ~core_vs_neg;
+assign VGA_HS_POS = tv15_en ? 1'b0 : ~core_hs_neg;
+assign VGA_VS_POS = tv15_en ? 1'b0 : ~core_vs_neg;
 always @(posedge clk_sys) begin
 	fb_en       <= ~vga_flags[2] && |vga_flags[1:0];
 	fb_base     <= {4'h3, 6'b111110, vga_start_addr, 2'b00};
@@ -1108,8 +1142,8 @@ assign fb_native  = 1'b0;
 assign fb_bpp     = 2'd0;
 assign VGA_SCALER = 1'b0;
 assign video_f60  = 1'b0;
-assign VGA_HS_POS = ~core_hs_neg;
-assign VGA_VS_POS = ~core_vs_neg;
+assign VGA_HS_POS = tv15_en ? 1'b0 : ~core_hs_neg;
+assign VGA_VS_POS = tv15_en ? 1'b0 : ~core_vs_neg;
 `endif
 
 assign LED_USER      = pll_locked;

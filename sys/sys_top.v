@@ -1343,6 +1343,14 @@ assign HDMI_TX_D  = hdmi_out_d;
 
 // Core-requested sync polarity for the direct (non-scaler) analog output.
 wire vga_hs_pos, vga_vs_pos;
+// alternate raster for the analog port only (a core's 15 kHz TV output);
+// the scaler keeps the primary raster
+wire        vga_alt_en;
+wire  [7:0] vga_alt_r, vga_alt_g, vga_alt_b;
+wire        vga_alt_hs, vga_alt_vs, vga_alt_de;
+`ifdef MISTER_DUAL_SDRAM
+assign vga_alt_en = 0;
+`endif
 
 /////////////////////////  VGA output  //////////////////////////////////
 
@@ -1406,6 +1414,13 @@ scanlines #(0) VGA_scanlines
 	.ce_out(vga_ce_sl)
 );
 
+// the analog port shows the core's alternate raster when it asks for it
+// (15 kHz TV output); the scaler input above stays on the primary raster
+wire [23:0] vga_data_pre = vga_alt_en ? {vga_alt_r, vga_alt_g, vga_alt_b} : vga_data_sl;
+wire        vga_hs_pre   = vga_alt_en ? vga_alt_hs : vga_hs_sl;
+wire        vga_vs_pre   = vga_alt_en ? vga_alt_vs : vga_vs_sl;
+wire        vga_de_pre   = vga_alt_en ? vga_alt_de : vga_de_sl;
+
 wire [23:0] vga_data_osd;
 wire        vga_vs_osd, vga_hs_osd, vga_de_osd;
 osd vga_osd
@@ -1418,10 +1433,10 @@ osd vga_osd
 	.osd_status(osd_status),
 
 	.clk_video(clk_vid),
-	.din(vga_data_sl),
-	.hs_in(vga_hs_sl),
-	.vs_in(vga_vs_sl),
-	.de_in(vga_de_sl),
+	.din(vga_data_pre),
+	.hs_in(vga_hs_pre),
+	.vs_in(vga_vs_pre),
+	.de_in(vga_de_pre),
 
 	.dout(vga_data_osd),
 	.hs_out(vga_hs_osd),
@@ -1786,6 +1801,13 @@ emu emu
 	.VGA_DISABLE(VGA_DISABLE),
 	.VGA_HS_POS(vga_hs_pos),
 	.VGA_VS_POS(vga_vs_pos),
+	.VGA_ALT_EN(vga_alt_en),
+	.VGA_ALT_R(vga_alt_r),
+	.VGA_ALT_G(vga_alt_g),
+	.VGA_ALT_B(vga_alt_b),
+	.VGA_ALT_HS(vga_alt_hs),
+	.VGA_ALT_VS(vga_alt_vs),
+	.VGA_ALT_DE(vga_alt_de),
 `endif
 
 	.HDMI_WIDTH(direct_video ? 12'd0 : hdmi_width),
