@@ -137,6 +137,9 @@ localparam CONF_STR = {
 	"P1O7,Analog output,VGA 31kHz,TV 15kHz;",
 	"P1OA,TV frame rate,60 Hz,Native;",
 	"P1OB,TV picture,Native size,Fill;",
+	"P1OEF,TV H-position,0,+1us,+2us,-1us;",
+	"P1OGH,TV V-position,0,+8,+16,-8;",
+	"P1O[24],TV hi-res modes,Line drop,Interlace;",
 	"P1oM,Border,Yes,No;",
 	"P1-;",
 	"P1oP,FM mode,OPL3,OPL2 compatibility;",
@@ -241,6 +244,8 @@ wire  [8:0] vga_width;
 wire [10:0] vga_height;
 wire  [8:0] vga_stride;
 wire        vga_dotdiv;
+wire        vga_doublescan;
+wire        tv_ilace;
 wire  [3:0] vga_flags;
 wire        vga_off;
 wire  [7:0] vga_pal_a;
@@ -740,6 +745,7 @@ system #(
 	.video_border        (~status[54]),  // OSD "Border" (oM): show the overscan border (both outputs share one raster)
 	.video_vstretch      (tv15_en & ~status[10]),  // OSD "TV frame rate" (OA): 60 Hz pads 70 Hz frames to 524 rows in TV mode
 	.video_vzoom         (tv15_en & status[11]),   // OSD "TV picture" (OB): Fill = every 5th display scanline twice (200 rows into 240 TV lines)
+	.video_vodd          (tv_ilace),                // the TV stage interlaces this picture: odd row count
 	.video_fb_native     (fb_native),
 	.video_fb_bpp        (fb_bpp),
 	.video_dac_565       (video_dac_565),
@@ -750,6 +756,7 @@ system #(
 	.video_height        (vga_height),
 	.video_stride        (vga_stride),
 	.video_dotdiv        (vga_dotdiv),
+	.video_doublescan    (vga_doublescan),
 	.video_flags         (vga_flags),
 	.video_off           (vga_off),
 	.video_pal_a         (vga_pal_a),
@@ -1061,6 +1068,11 @@ vga_tv15 #(.CLK_RATE(CLOCK_RATE_HZ)) vga_tv15
 	.clk                (clk_sys),
 	.reset              (reset_sync_r[2]),
 	.enable             (tv15_en),
+	.hpos               (status[15:14]),
+	.vpos               (status[17:16]),
+	.ilace_en           (status[24]),
+	.doublescan         (vga_doublescan),
+	.ilace_active       (tv_ilace),
 	.ce                 (core_ce_pixel),
 	.r                  (VGA_R),
 	.g                  (VGA_G),

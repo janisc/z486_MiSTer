@@ -61,6 +61,10 @@ module vga_tv15 #(parameter CLK_RATE = 85000000)
 	input             clk,
 	input             reset,
 	input             enable,
+	input       [1:0] hpos,        // picture left edge: 0, +1, +2, -1 us
+	input       [1:0] vpos,        // picture vertical position: 0, +8, +16, -8 lines
+	input             ilace_en,    // 400/480-row pictures as two interlaced fields instead of one line in two
+	input             doublescan,  // the VGA raster scans every row twice (200/240-row modes)
 
 	input             ce,
 	input       [7:0] r,
@@ -71,6 +75,7 @@ module vga_tv15 #(parameter CLK_RATE = 85000000)
 	input             de,
 
 	output reg        alt_en,
+	output            ilace_active, // this picture is being interlaced (the CRTC then keeps the row count odd)
 	output reg  [7:0] alt_r,
 	output reg  [7:0] alt_g,
 	output reg  [7:0] alt_b,
@@ -87,6 +92,7 @@ localparam LINES_LO  = 400;                           // lines per frame accepte
 localparam LINES_HI  = 560;                           // (449 at 70 Hz, 524/525 at 60 Hz)
 localparam HS_CYC    = CLK_RATE / 212766;             // 4.7 us sync
 localparam ACT_CYC   = CLK_RATE / 100000;             // picture starts 10 us after sync start
+localparam US_CYC    = CLK_RATE / 1000000;            // one microsecond
 localparam VS_LINES  = 6;                             // output vsync: 6 input lines = 3 output lines
 localparam SAFE_LINE = CLK_RATE / 15734;              // self-timed raster: 15.734 kHz
 localparam SAFE_ACT1 = ACT_CYC + CLK_RATE / 19231;    // 52 us of picture
@@ -167,6 +173,24 @@ always @(posedge clk) begin
 	end
 end
 
+// ---------------------------------------------------------------- user offsets
+reg [12:0] act_cyc;
+reg [10:0] vofs;
+always @(posedge clk) begin
+	case (hpos)
+		2'd1: act_cyc <= ACT_CYC[12:0] + US_CYC[12:0];
+		2'd2: act_cyc <= ACT_CYC[12:0] + 2 * US_CYC[12:0];
+		2'd3: act_cyc <= ACT_CYC[12:0] - US_CYC[12:0];
+		default: act_cyc <= ACT_CYC[12:0];
+	endcase
+	case (vpos)                                        // in input lines (two per output line)
+		2'd1: vofs <= 11'd16;
+		2'd2: vofs <= 11'd32;
+		2'd3: vofs <= 11'h7F0;                         // -16
+		default: vofs <= 11'd0;
+	endcase
+end
+
 // ---------------------------------------------------------------- vertical placement
 // Per frame: lines from the input vsync to the first picture line (first_de),
 // picture lines (de_lines), lines per frame (F). The output vsync goes
@@ -235,7 +259,7 @@ always @(posedge clk) begin
 		end
 		else case (calc)
 			3'd1: begin mul <= frame_l * 8'd138; calc <= 3'd2; end
-			3'd2: begin target <= (mul[18:8] > {1'b0, de_lines_l[10:1]}) ? mul[18:8] - {1'b0, de_lines_l[10:1]} : 11'd0; calc <= 3'd3; end
+			3'd2: begin target <= (mul[18:8] + vofs > {1'b0, de_lines_l[10:1]}) ? mul[18:8] + vofs - {1'b0, de_lines_l[10:1]} : 11'd0; calc <= 3'd3; end
 			3'd3: begin dlt <= first_de_l - target; dlt_f <= first_de_l - target + frame_l; calc <= 3'd4; end
 			3'd4: begin delay_reg <= (de_lines_l == 0) ? 11'd0 : (first_de_l >= target) ? dlt : dlt_f; calc <= 3'd0; end
 			default: ;
@@ -254,6 +278,14 @@ reg [10:0] cap_len;        // pixels captured in that line
 reg        out_start;      // an output line begins now
 reg  [2:0] vs_lines;       // output vsync countdown, in input lines
 reg        hs_rise_d;      // hs_rise delayed to line up with fire
+reg        vs_pend;        // vsync requested, starts with the next output line
+// Interlace: the 400/480-row modes (not the doublescanned ones, whose two scans of a row
+// are identical) as two fields of alternate lines. With an odd row count per frame (the
+// CRTC pads to 525 in that case) the captured parity flips by itself every frame and the
+// vsync lands mid-line every other frame: the half-line offset a TV needs, with the line
+// timing untouched. So: no line-phase restart, and the vsync starts where it is placed.
+wire       ilace = ilace_en && ~doublescan && (de_lines_l >= 11'd350);
+assign     ilace_active = ilace;
 
 always @(posedge clk) begin
 	out_start <= 0;
@@ -263,6 +295,7 @@ always @(posedge clk) begin
 		cap_buf   <= 0;
 		cap_idx   <= 0;
 		vs_lines  <= 0;
+		vs_pend   <= 0;
 	end
 	else begin
 		if (hs_rise_d) begin
@@ -274,9 +307,19 @@ always @(posedge clk) begin
 				out_start <= 1;
 			end
 			cap_idx <= 0;
-			// restart the line phase at the output vsync: the line starting now is captured
-			cap_phase <= fire ? 1'b1 : ~cap_phase;
-			if (fire) vs_lines <= VS_LINES[2:0];
+			// progressive: restart the line phase at the output vsync (the line starting now
+			// is captured) and start the vsync together with the next output line, never in
+			// the middle of one; interlaced: leave the phase alone, vsync where it falls
+			if (fire & ~ilace) begin
+				cap_phase <= 1'b1;
+				vs_pend   <= 1;
+			end
+			else cap_phase <= ~cap_phase;
+			if (fire & ilace) vs_lines <= VS_LINES[2:0];
+			else if (vs_pend && cap_phase && ~fire) begin
+				vs_lines <= VS_LINES[2:0];
+				vs_pend  <= 0;
+			end
 			else if (vs_lines != 0) vs_lines <= vs_lines - 1'd1;
 		end
 		if (ce & de & cap_phase) begin
@@ -326,15 +369,16 @@ always @(posedge clk) begin
 			if (ce) begin
 				// the picture starts on the first pixel enable after the porch, so
 				// every pixel, the first included, lasts exactly two enables
-				if (~rep_done && out_cyc >= ACT_CYC[12:0]) begin
+				if (~rep_done && out_cyc >= act_cyc) begin
 					rep_done <= 1;
 					rep_on   <= (rep_len != 0);
 				end
 				else if (rep_on) begin
 					rep_half <= ~rep_half;
 					if (rep_half) begin
-						rep_idx <= rep_idx + 1'd1;
+						// hold the last pixel's address: the store beyond the line is stale
 						if (rep_idx + 1'd1 == rep_len[9:0]) rep_on <= 0;
+						else rep_idx <= rep_idx + 1'd1;
 					end
 				end
 			end

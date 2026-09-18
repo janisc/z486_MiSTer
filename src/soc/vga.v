@@ -87,6 +87,7 @@ module vga
 	input               vga_border,
 	input               vga_vstretch,      // TV output: pad frames shorter than 524 rows to 524 (60 Hz at 31.5 kHz)
 	input               vga_vzoom,         // TV output: show every 5th display scanline twice (6/5 vertical zoom) when the picture is under 460 lines
+	input               vga_vodd,          // TV output: make the padded frame an odd number of rows (interlace) instead of even
 
 	// native SVGA (8bpp framebuffer) support: raster-stage timing out, fetched pixel in
 	output              vga_lf_ce,          // dot clock enable
@@ -1584,7 +1585,13 @@ wire        vz_active = vga_vzoom && (crtc_vertical_display_size < 11'd460) && ~
 reg         vz_rep;        // the physical line in progress repeats the previous scanline
 reg   [2:0] vz_cnt;        // display scanlines mod 5
 reg   [7:0] vz_ins;        // lines inserted this frame
-wire [10:0] vert_total     = (vga_vstretch && (vert_total_crtc + vz_ins) < 11'd523) ? (11'd523 - vz_ins) : vert_total_crtc;
+wire [10:0] vert_total_pad = (vga_vstretch && (vert_total_crtc + vz_ins) < 11'd523) ? (11'd523 - vz_ins) : vert_total_crtc;
+// Frame parity: the 15 kHz stage makes one output line of two input rows, so an even row
+// count gives a frame of whole output lines (progressive, no half line anywhere) and an
+// odd one the half-line offset between fields that interlace needs (525 rows = 262.5
+// lines per field). Physical rows = vert_total + 1 + inserted lines.
+wire        vert_par_even  = vert_total_pad[0] ^ vz_ins[0];   // 1: the physical row count is even
+wire [10:0] vert_total     = (vga_vstretch && (vert_par_even == vga_vodd)) ? vert_total_pad + 1'd1 : vert_total_pad;
 // In TV mode everything from the vertical retrace start to the end of the (padded) frame is
 // blanked, overscan rows included: the TV stage centres the picture from the run of lines
 // with DE, and the bottom overscan rows would otherwise start that run 75 padding rows

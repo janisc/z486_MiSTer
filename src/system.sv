@@ -141,6 +141,7 @@ module system (
 	input              video_border,	// show VGA overscan border (OSD)
 	input              video_vstretch,	// TV output: pad short frames to 524 rows (60 Hz)
 	input              video_vzoom,	// TV output: 6/5 vertical zoom (every 5th display scanline twice)
+	input              video_vodd,	// TV output: odd row count (interlace)
 	input              video_fb_native,	// native analog output of the 8/16bpp framebuffer modes
 	input        [1:0] video_fb_bpp,	// framebuffer depth: 0 = 8, 1 = 16, 2 = 24 bits per pixel
 	output             video_dac_565,	// 16bpp framebuffer is 5:6:5 (from the HiColor DAC command register)
@@ -151,6 +152,7 @@ module system (
 	output wire [10:0] video_height,
 	output wire  [8:0] video_stride,
 	output wire        video_dotdiv,	// sequencer dot clock halved (320-wide modes): 16bpp row pitch doubles
+	output wire        video_doublescan,	// every row scanned twice (200/240-row modes)
 	output wire  [3:0] video_flags,
 	output wire        video_off,
 	output wire  [7:0] video_pal_a,
@@ -962,6 +964,7 @@ assign ioctl_wait           = 1'b0;
 // holds it for a whole burst, during which main_memory sees busy.
 wire        lf_ce, lf_nd, lf_vsync, lf_doublescan, lf_dotdiv;
 assign video_dotdiv = lf_dotdiv;
+assign video_doublescan = lf_doublescan;
 wire  [7:0] lf_pixel;
 wire [23:0] lf_rgb;
 wire        lf_pix_ce;
@@ -1296,6 +1299,7 @@ vga vga_inst
 	.vga_border        (video_border),
 	.vga_vstretch      (video_vstretch),
 	.vga_vzoom         (video_vzoom),
+	.vga_vodd          (video_vodd),
 	.vga_lf_ce         (lf_ce),
 	.vga_lf_nd         (lf_nd),
 	.vga_lf_vsync      (lf_vsync),
