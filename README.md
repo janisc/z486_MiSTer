@@ -55,8 +55,34 @@ output the same fixed 60 Hz, by frame conversion in the scaler, and the CRT keep
 its real 70 Hz.
 
 **I want to play DOS games on a 15 kHz TV or arcade monitor. How?**
-The raster is 31 kHz and a 15 kHz set cannot sync to it, so put the scaler picture
-on the analog port instead, in a 240p mode the set accepts:
+Set `Analog output` to `TV 15kHz` in the OSD's Audio & Video page, and keep
+`composite_sync=1` in MiSTer.ini if the set wants sync on the H line, as SCART sets
+do. The core then makes a real 15 kHz raster out of the VGA picture: every VGA line
+lasts 31.8 us whatever the mode, so one line played out over the time of two is a
+15.73 kHz line, and one line in two is shown. The 320x200, 320x240 and EGA 200-line
+modes, which VGA scans twice, come out complete as true 240p: Doom, the LucasArts and
+Sierra adventures, Keen. Text and the 640x400 and 640x480 modes lose every other row
+and are readable rather than pretty. With `TV picture` at `Native size` nothing is
+scaled: 200 rows are 200 TV lines, a little less than a console's 240, so there is a
+black band above and below the picture. `Fill` shows every fifth scanline twice, so
+200 rows become 240 lines and fill the screen, the same 1.2 stretch the scaler gives
+but with sharp lines; the SVGA framebuffer modes are left at native size. The picture
+is centred in the standard 240-line window; sets differ by ten lines or so in their
+own vertical centring, and with `Fill` the outermost lines fall into the set's
+overscan as they do with a console. HDMI keeps the normal 31 kHz picture at the same
+time (with `Fill` it shows the stretched frame too).
+
+VGA's 200- and 400-line modes run at 70 Hz and consumer TVs lock to 50 or 60 Hz only.
+With the default `TV frame rate` of `60 Hz` the core pads those frames to 60 Hz;
+software that paces itself on the vertical retrace then runs at 60 instead of 70, as
+it did with the stock core's old VSync 60Hz option. Arcade monitors and PVMs that take
+70 Hz can use `Native`. Modes the set cannot show, 800x600 and up and UniVBE's 35 Hz
+modes, turn the screen dark green until the software returns to a supported mode; the
+OSD still works on it. A few characters cut off at the left and right are the set's
+overscan, as with any console.
+
+The scaler is the alternative if you want the screen filled: it scales the picture to
+240 lines and frame-converts 70 Hz to 60 with a dropped frame now and then:
 
 ```ini
 [z486]
@@ -65,13 +91,11 @@ vsync_adjust=0
 video_mode=1440,32,124,120,240,4,3,15,27000
 ```
 
-That is 240 lines at 60 Hz with 15.73 kHz lines (NTSC timing; a PAL set that
-takes NTSC will work). Then set Aspect ratio to Full Screen in the OSD's video
-settings, otherwise the framework fits the 4:3 picture into the wide frame as a
-narrow strip. The pixel clock is 27 MHz with 1440 dots rather than 13.5 MHz with
-720 because the HDMI PLL cannot synthesise 13.5 MHz exactly and came out 3 %
-high; at 27 MHz it is exact and the TV sees identical sync. Keep
-`composite_sync=1` if the set wants sync on the H line, as most do.
+Then set Aspect ratio to Full Screen in the OSD's video settings, otherwise the
+framework fits the 4:3 picture into the wide frame as a narrow strip. The pixel
+clock is 27 MHz with 1440 dots rather than 13.5 MHz with 720 because the HDMI PLL
+cannot synthesise 13.5 MHz exactly; at 27 MHz it is exact and the TV sees identical
+sync.
 
 **I use a DAC on the HDMI connector (direct video). What do I need?**
 `direct_video=1` in that ini, as for any core; the framework routes the raster to

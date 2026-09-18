@@ -1,0 +1,1 @@
+f840399d01073510888a52e8a34c760a91bfccc7 vga: in TV mode blank from the vertical retrace start to the end of the frame
