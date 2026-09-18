@@ -1585,7 +1585,11 @@ reg         vz_rep;        // the physical line in progress repeats the previous
 reg   [2:0] vz_cnt;        // display scanlines mod 5
 reg   [7:0] vz_ins;        // lines inserted this frame
 wire [10:0] vert_total     = (vga_vstretch && (vert_total_crtc + vz_ins) < 11'd523) ? (11'd523 - vz_ins) : vert_total_crtc;
-wire        vert_stretch   = vert_cnt > vert_total_crtc;   // inside the padding: blanked, not overscan
+// In TV mode everything from the vertical retrace start to the end of the (padded) frame is
+// blanked, overscan rows included: the TV stage centres the picture from the run of lines
+// with DE, and the bottom overscan rows would otherwise start that run 75 padding rows
+// too early. Guarded so a retrace programmed inside the display area cannot cut the picture.
+wire        vert_stretch   = vga_vstretch && (vert_cnt >= crtc_vertical_retrace_start) && (vert_cnt > crtc_vertical_display_size);
 
 wire hde = horiz_cnt < crtc_horizontal_display_size;
 wire vde = vert_cnt <= crtc_vertical_display_size;
