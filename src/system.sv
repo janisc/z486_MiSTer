@@ -963,7 +963,7 @@ assign ioctl_wait           = 1'b0;
 // native-output line fetcher (read bursts) share it. main_memory has priority;
 // the fetcher takes the bus only when main_memory has nothing in flight and
 // holds it for a whole burst, during which main_memory sees busy.
-wire        lf_ce, lf_nd, lf_vsync, lf_doublescan, lf_dotdiv;
+wire        lf_ce, lf_nd, lf_vsync, lf_doublescan, lf_dotdiv, lf_rep2;
 assign video_dotdiv = lf_dotdiv;
 assign video_doublescan = lf_doublescan;
 wire  [7:0] lf_pixel;
@@ -993,6 +993,7 @@ svga_linebuf svga_linebuf
 	.not_displaying (lf_nd),
 	.vsync          (lf_vsync),
 	.doublescan     (lf_doublescan),
+	.rep2           (lf_rep2),
 	.dotdiv         (lf_dotdiv),
 	.start_addr     (video_start_addr),
 	.stride_words   (video_stride),
@@ -1306,6 +1307,7 @@ vga vga_inst
 	.vga_lf_nd         (lf_nd),
 	.vga_lf_vsync      (lf_vsync),
 	.vga_lf_doublescan (lf_doublescan),
+	.vga_lf_rep2       (lf_rep2),
 	.vga_lf_dotdiv     (lf_dotdiv),
 	.fb_native         (video_fb_native),
 	.fb_pixel          (lf_pixel),

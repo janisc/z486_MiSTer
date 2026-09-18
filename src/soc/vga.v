@@ -96,6 +96,7 @@ module vga
 	output              vga_lf_vsync,       // vertical sync, active high
 	output              vga_lf_doublescan,
 	output              vga_lf_dotdiv,      // sequencer dot clock divided by two (a dot lasts two ce)
+	output              vga_lf_rep2,        // TV zoom: the scanline two ahead repeats the one ahead (fetch it again)
 	input               fb_native,          // 1: take the DAC index from fb_pixel inside the display window (8bpp)
 	input       [7:0]   fb_pixel,
 	input               fb_native16,        // 1: 16/24bpp framebuffer rendered natively: fb_rgb bypasses the palette
@@ -1582,7 +1583,15 @@ wire [10:0] vert_total_crtc = crtc_vertical_total  + VGA_V_TOTAL_EXTRA;
 // physical line. Only the legacy raster (not the framebuffer fetcher) and only pictures
 // under 460 lines; the 480-line modes fill a TV frame as they are. The padding above
 // counts the inserted lines so the frame still ends at 524 rows where there is room.
-wire        vz_active = vga_vzoom && (crtc_vertical_display_size < 11'd460) && ~fb_native && ~fb_native16;
+wire        vz_active = vga_vzoom && (crtc_vertical_display_size < 11'd460);
+// For the framebuffer fetcher, which requests raster line n+2 at the end of line n:
+// does line n+2 repeat line n+1? Evaluated during line n from the same state the
+// scanline counter uses at this line's hsync (the display end, where the fetcher
+// looks, comes before the hsync).
+wire        vz_rep_next   = vz_active && vde && ~vz_rep && (vz_cnt == 3'd4);                 // n+1 repeats n
+wire  [2:0] vz_cnt_next   = (vz_cnt == 3'd4 || ~vde) ? 3'd0 : vz_cnt + 1'd1;                    // vz_cnt during n+1
+wire        vde_next      = (vert_cnt + 1'd1) <= crtc_vertical_display_size;
+assign      vga_lf_rep2   = vz_active && ~vz_rep_next && vde_next && (vz_cnt_next == 3'd4);   // n+2 repeats n+1
 reg         vz_rep;        // the physical line in progress repeats the previous scanline
 reg   [2:0] vz_cnt;        // display scanlines mod 5
 reg   [7:0] vz_ins;        // lines inserted this frame
