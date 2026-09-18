@@ -1,1 +1,1 @@
-a7b4a652efc7599dbc721bc3d199c6f5fc4a2593 TV output: picture starts 11.3 us after sync, overscan border hidden in TV mode
+a59179e678ebd77970783791c40b04323114a798 TV output: finer H/V position steps, TV options shown only in TV mode (build 8 = release 10 binary, fitter seed 5 from the sweep of 2026-09-18)
