@@ -61,8 +61,8 @@ module vga_tv15 #(parameter CLK_RATE = 85000000)
 	input             clk,
 	input             reset,
 	input             enable,
-	input       [1:0] hpos,        // picture left edge: 0, +0.5, -1, -2 us
-	input       [1:0] vpos,        // picture vertical position: 0, +8, +16, -8 lines
+	input       [2:0] hpos,        // picture left edge: 0, +0.5, -0.5, -1, -1.5, -2, -2.5, -3 us
+	input       [2:0] vpos,        // picture vertical position: 0, +4, +8, +12, +16, -4, -8, -12 lines
 	input             ilace_en,    // 400/480-row pictures as two interlaced fields instead of one line in two
 	input             doublescan,  // the VGA raster scans every row twice (200/240-row modes)
 
@@ -179,16 +179,24 @@ end
 reg [12:0] act_cyc;
 reg [10:0] vofs;
 always @(posedge clk) begin
-	case (hpos)
-		2'd1: act_cyc <= ACT_CYC[12:0] + US_CYC[12:0] / 2;
-		2'd2: act_cyc <= ACT_CYC[12:0] - US_CYC[12:0];
-		2'd3: act_cyc <= ACT_CYC[12:0] - 2 * US_CYC[12:0];
+	case (hpos)                                        // half-microsecond steps
+		3'd1: act_cyc <= ACT_CYC[12:0] + US_CYC[12:0] / 2;
+		3'd2: act_cyc <= ACT_CYC[12:0] - US_CYC[12:0] / 2;
+		3'd3: act_cyc <= ACT_CYC[12:0] - US_CYC[12:0];
+		3'd4: act_cyc <= ACT_CYC[12:0] - US_CYC[12:0] - US_CYC[12:0] / 2;
+		3'd5: act_cyc <= ACT_CYC[12:0] - 2 * US_CYC[12:0];
+		3'd6: act_cyc <= ACT_CYC[12:0] - 2 * US_CYC[12:0] - US_CYC[12:0] / 2;
+		3'd7: act_cyc <= ACT_CYC[12:0] - 3 * US_CYC[12:0];
 		default: act_cyc <= ACT_CYC[12:0];
 	endcase
-	case (vpos)                                        // in input lines (two per output line)
-		2'd1: vofs <= 11'd16;
-		2'd2: vofs <= 11'd32;
-		2'd3: vofs <= 11'h7F0;                         // -16
+	case (vpos)                                        // in input lines (two per output line): steps of 4 lines
+		3'd1: vofs <= 11'd8;
+		3'd2: vofs <= 11'd16;
+		3'd3: vofs <= 11'd24;
+		3'd4: vofs <= 11'd32;
+		3'd5: vofs <= 11'h7F8;                         // -8
+		3'd6: vofs <= 11'h7F0;                         // -16
+		3'd7: vofs <= 11'h7E8;                         // -24
 		default: vofs <= 11'd0;
 	endcase
 end

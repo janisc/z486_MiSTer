@@ -135,11 +135,11 @@ localparam CONF_STR = {
 	"P1-;",
 	"P1OMN,Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
 	"P1O7,Analog output,VGA 31kHz,TV 15kHz;",
-	"P1OA,TV frame rate,60 Hz,Native;",
-	"P1OB,TV picture,Native size,Fill;",
-	"P1OEF,TV H-position,0,+0.5us,-1us,-2us;",
-	"P1OGH,TV V-position,0,+8,+16,-8;",
-	"P1O[24],TV hi-res modes,Line drop,Interlace;",
+	"h2P1OA,TV frame rate,60 Hz,Native;",
+	"h2P1OB,TV picture,Native size,Fill;",
+	"h2P1OEG,TV H-position,0,+0.5us,-0.5us,-1us,-1.5us,-2us,-2.5us,-3us;",
+	"h2P1OQS,TV V-position,0,+4,+8,+12,+16,-4,-8,-12;",
+	"h2P1O[24],TV hi-res modes,Line drop,Interlace;",
 	"P1oM,Border,Yes,No;",
 	"P1-;",
 	"P1oP,FM mode,OPL3,OPL2 compatibility;",
@@ -308,7 +308,7 @@ wire [12:0] arx;
 wire [12:0] ary;
 wire        mt32_available;
 wire        mt32_newmode;
-wire [15:0] status_menumask = {14'd0, mt32_newmode, mt32_available};
+wire [15:0] status_menumask = {13'd0, tv15_en, mt32_newmode, mt32_available};   // bit 2: the TV options show only in TV mode
 wire [127:0] status_in = 128'd0;
 wire        status_set = 1'b0;
 wire        info_req;
@@ -1069,8 +1069,8 @@ vga_tv15 #(.CLK_RATE(CLOCK_RATE_HZ)) vga_tv15
 	.clk                (clk_sys),
 	.reset              (reset_sync_r[2]),
 	.enable             (tv15_en),
-	.hpos               (status[15:14]),
-	.vpos               (status[17:16]),
+	.hpos               (status[16:14]),
+	.vpos               (status[28:26]),
 	.ilace_en           (status[24]),
 	.doublescan         (vga_doublescan),
 	.ilace_active       (tv_ilace),

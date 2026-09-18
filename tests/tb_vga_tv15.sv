@@ -25,7 +25,7 @@ reg      hs = 0, vs = 0, de = 0;
 reg [7:0] r, g, b;
 reg      reset = 1;
 reg      doublescan = 1;
-reg [1:0] hpos = 0, vpos = 0;
+reg [2:0] hpos = 0, vpos = 0;
 reg      ilace_en = 0;
 
 always @(posedge clk) begin
@@ -227,12 +227,12 @@ initial begin
 	if (lines_per_frame_last != 262) fail("safe raster lines per frame");
 	phase_done("4 safe raster");
 
-	// ---- 5. offsets: +0.5 us left edge, +8 lines down (mode 13h, 524 rows)
+	// ---- 5. offsets: +0.5 us left edge, +4 lines down (mode 13h, 524 rows)
 	set_mode13h; vtotal = 524; expected_period = 2 * 2701; hpos = 1; vpos = 1;
 	wait_frames(5); @(posedge vs); @(posedge clk); @(posedge clk); clear_stats;
 	wait_frames(2); @(posedge clk); @(posedge clk);
-	$display("offsets: top %0d (expected ~50), de offset %0d clk (expected ~1002), pixel errors %0d", pic_top_last, de_ofs_last, pix_errors);
-	if (pic_top_last < 48 || pic_top_last > 53) fail("V offset");
+	$display("offsets: top %0d (expected ~46), de offset %0d clk (expected ~1002), pixel errors %0d", pic_top_last, de_ofs_last, pix_errors);
+	if (pic_top_last < 44 || pic_top_last > 49) fail("V offset");
 	if (de_ofs_last < 1002 - 8 || de_ofs_last > 1002 + 40) fail("H offset");
 	if (pix_errors != 0) fail("offset pixels");
 	phase_done("5 offsets");
