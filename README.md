@@ -2,13 +2,24 @@
 
 This is a fork of [nand2mario/z486_MiSTer](https://github.com/nand2mario/z486_MiSTer).
 The changes were written by an AI (Claude); the goals came from the repository owner,
-who tested every build on real hardware. It makes the MiSTer analog output drive a
-PC VGA CRT monitor with the core's own raster instead of the HDMI scaler: 31.5 kHz
-lines at the mode's real refresh rate, the real dot clocks, the sync polarity a VGA
-card uses, and the picture placed after hsync where a real card puts it, so one
-monitor adjustment fits every DOS mode. The SVGA framebuffer modes (256-colour,
-15/16-bit and 24-bit) are rendered natively as well, so the analog port never hands
-over to the scaler.
+who tested every build on real hardware. It changes what the MiSTer analog output
+carries: the core's own raster instead of the scaler's fixed-mode picture, for two
+kinds of display.
+
+- **A VGA CRT monitor** gets 31.5 kHz lines at each mode's real refresh rate, the real
+  dot clocks, the sync polarity a VGA card uses, and the picture placed after hsync
+  where a real card puts it, so one monitor adjustment fits every DOS mode. The SVGA
+  framebuffer modes (256-colour, 15/16-bit and 24-bit) are rendered natively as well,
+  up to 1024x768, so the analog port never hands over to the scaler.
+- **A 15 kHz TV or arcade monitor** gets a real 15 kHz raster (`Analog output: TV 15kHz`
+  in the OSD, since release 10): the scan-doubled 320x200 and 320x240 modes come out
+  as true 240p, text and the 640-wide modes as every other row or as two interlaced
+  fields, the 70 Hz modes padded to 60 Hz for sets that lock to 60 only, with the
+  picture size and position adjustable from the OSD. Modes the set cannot show are
+  blanked rather than sent.
+
+HDMI works as on every core in both cases and shows the same picture through the
+scaler. The FAQ below has the setup for each display, what works and what does not.
 
 The changes are on branch `native-vga`; `main` tracks upstream. Experiments,
 including a parked real dot-clock PLL, are on `exp/*` branches. The rbf files of
@@ -169,11 +180,28 @@ The analog VGA port always carries the core's own raster: the real 25.175 and
 (400-line modes H-/V+, 350-line H+/V-, 480-line H-/V-), and the picture placed
 after hsync where a real card puts it. The SVGA framebuffer modes (8, 16 and
 24bpp) are fetched from the DDR3 framebuffer line by line and shown the same way,
-so the port never hands over to the scaler. There is no OSD switch: the HDMI
-output is always the scaler, the analog output always the raster, and the
-exceptions in the FAQ are MiSTer.ini settings handled by the framework. The
-`Border` option shows or hides the overscan border on both outputs (the framework
+so the port never hands over to the scaler. The only OSD switch is `Analog
+output`, which chooses the raster the port carries; the HDMI output is always the
+scaler, and the exceptions in the FAQ are MiSTer.ini settings handled by the
+framework. The `Border` option shows or hides the overscan border on both outputs (the framework
 blanks the analog picture with the same signal the scaler crops to).
+
+In TV mode a line store (`src/soc/vga_tv15.sv`) sits between the raster and the
+analog port. Every VGA line lasts 31.8 us whatever the mode, so the store captures
+one line in two and plays it out over the time of two at half the dot rate: a
+15.73 kHz line with TV sync widths (4.7 us sync, picture from 11.3 us after it). The
+scan-doubled modes lose nothing, since each row was drawn twice; the other modes
+lose every other row, or are shown as two fields when `Interlace` is selected. The
+output vsync is placed from the measured frame so the picture sits centred in the
+240 visible lines. With `TV frame rate` at `60 Hz` the CRTC pads the 70 Hz modes
+with blank lines below the picture until the frame lasts a 60 Hz frame time, so no
+frame is dropped or repeated; `Fill` makes the CRTC hold every fifth display
+scanline for one more line, so 200 rows become 240. Anything the store cannot
+convert (a line period off 31.8 us by more than 5 %, a frame outside 400 to 560
+lines, no sync) switches the port to a self-timed 15.73 kHz, 60 Hz raster in dark
+green on the first bad line, so the set never receives an out-of-range signal. The
+scaler keeps the 31 kHz raster, and the OSD is mixed in after the conversion, so it
+stays usable on the TV.
 
 The emulated card identifies itself to chip detectors as an ET4000AX: port 3CB
 implements only the bank bit for the second megabyte and reads back 11h for the
