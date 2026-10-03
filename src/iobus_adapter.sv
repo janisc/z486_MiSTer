@@ -33,6 +33,7 @@ module iobus_adapter (
     output reg         io_write,
     output reg  [7:0]  io_writedata,
     input       [7:0]  io_readdata,
+    input              io_wait,           // the selected peripheral needs more time: the byte's wait state is held
 
     // IDE 32-bit interface (directly drives IDE module)
     output reg  [3:0]  ide_address,
@@ -175,7 +176,7 @@ always @(posedge clk) begin
                     state <= S_ISSUE1;
             end
 
-            S_WAIT0: state <= is_read ? S_CAP0 : S_ISSUE1;
+            S_WAIT0: if (!io_wait) state <= is_read ? S_CAP0 : S_ISSUE1;
 
             S_CAP0: begin
                 read_accum[7:0] <= io_readdata;
@@ -200,7 +201,7 @@ always @(posedge clk) begin
                     state <= S_ISSUE2;
             end
 
-            S_WAIT1: state <= is_read ? S_CAP1 : S_ISSUE2;
+            S_WAIT1: if (!io_wait) state <= is_read ? S_CAP1 : S_ISSUE2;
 
             S_CAP1: begin
                 read_accum[15:8] <= io_readdata;
@@ -225,7 +226,7 @@ always @(posedge clk) begin
                     state <= S_ISSUE3;
             end
 
-            S_WAIT2: state <= is_read ? S_CAP2 : S_ISSUE3;
+            S_WAIT2: if (!io_wait) state <= is_read ? S_CAP2 : S_ISSUE3;
 
             S_CAP2: begin
                 read_accum[23:16] <= io_readdata;
@@ -250,7 +251,7 @@ always @(posedge clk) begin
                     state <= S_DONE;
             end
 
-            S_WAIT3: state <= is_read ? S_CAP3 : S_DONE;
+            S_WAIT3: if (!io_wait) state <= is_read ? S_CAP3 : S_DONE;
 
             S_CAP3: begin
                 read_accum[31:24] <= io_readdata;
