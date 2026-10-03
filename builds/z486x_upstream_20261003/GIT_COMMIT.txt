@@ -1,1 +1,1 @@
-a8df3362c38b35169f300d1bcbff9f382809ceb5 TV output: Fill also for the framebuffer modes (build 1, production profile, default seed)
+a8df3362c38b35169f300d1bcbff9f382809ceb5 TV output: Fill also for the framebuffer modes (build 2 = fitter seed 7 of the sweep of 2026-10-03; build 1 was the direct build with seed 6)
