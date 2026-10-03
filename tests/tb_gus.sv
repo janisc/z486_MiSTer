@@ -53,6 +53,7 @@ reg  [15:0] req_port = 0;
 reg   [7:0] req_data = 0;
 reg         done = 0;
 reg   [7:0] cap = 0;
+reg   [7:0] early = 0;       // the data in the first clock without wait (where ao486's bus captures)
 reg   [2:0] st = 0;
 integer     wait_cycles = 0, wait_max = 0;
 
@@ -73,7 +74,7 @@ always @(posedge clk) begin
 			else begin io_write <= 1; io_writedata <= req_data; end
 			st <= 2;
 		end
-		2: if (!io_wait) st <= req_rd ? 3'd3 : 3'd4;  // WAIT, held by the peripheral
+		2: if (!io_wait) begin early <= readdata; st <= req_rd ? 3'd3 : 3'd4; end  // WAIT, held by the peripheral
 		   else begin
 			wait_cycles <= wait_cycles + 1;
 			if (wait_cycles > 200000) begin $display("FAIL: io_wait stuck"); $finish; end
@@ -106,12 +107,40 @@ begin
 end
 endtask
 
+// ---------------------------------------------------------------- DMA controller as z486's engine serves a device
+// (one word per request: memory read, then ack for one clock with the data, terminal count one
+// clock after the ack of the last word, and the channel masks itself)
+reg         dack = 0, dtc = 0;
+reg  [15:0] dma_rd = 0;
+reg   [2:0] dst = 0;
+integer     dma_left = 0, dma_idx = 0, dma_lat = 0, dma_words_done = 0;
+reg  [15:0] dma_pattern [0:255];
+wire        dma_req;
+
+always @(posedge clk) begin
+	dack <= 0;
+	dtc  <= 0;
+	case (dst)
+		0: if (dma_req && dma_left > 0) begin dst <= 1; dma_lat <= 2 + ($urandom % 6); end
+		1: if (dma_lat == 0) begin dma_rd <= dma_pattern[dma_idx]; dack <= 1; dst <= 4; end
+		   else dma_lat <= dma_lat - 1;
+		4: begin
+			if (dma_left == 1) dtc <= 1;
+			dma_left <= dma_left - 1;
+			dma_idx  <= dma_idx + 1;
+			dma_words_done <= dma_words_done + 1;
+			dst <= 5;
+		end
+		5: dst <= 0;
+	endcase
+end
+
 // ---------------------------------------------------------------- GUS
 wire        mem_req, mem_we, mem_word, mem_ack;
 wire [19:0] mem_addr;
 wire [15:0] mem_wdata, mem_rdata;
 wire [15:0] audio_l, audio_r;
-wire        irq, dma_req;
+wire        irq;
 
 gus #(.CLK_RATE(CLK_RATE)) dut
 (
@@ -119,7 +148,7 @@ gus #(.CLK_RATE(CLK_RATE)) dut
 	.io_address8(io_address[8]), .io_address(io_address[3:0]),
 	.writedata(io_writedata), .readdata(readdata),
 	.gus_cs(gus_cs), .fm_cs(fm_cs), .write(io_write), .read(io_read), .io_wait(io_wait),
-	.dma_req(dma_req), .dma_ack(1'b0), .dma_tc(1'b0), .dma_readdata(16'd0), .dma_writedata(),
+	.dma_req(dma_req), .dma_ack(dack), .dma_tc(dtc), .dma_readdata(dma_rd), .dma_writedata(),
 	.irq(irq), .audio_l(audio_l), .audio_r(audio_r),
 	.mem_req(mem_req), .mem_we(mem_we), .mem_word(mem_word), .mem_addr(mem_addr),
 	.mem_wdata(mem_wdata), .mem_rdata(mem_rdata), .mem_ack(mem_ack)
@@ -231,6 +260,55 @@ endtask
 
 integer    errors = 0;
 integer    n;
+integer    guard;
+reg  [7:0] st41, st246;
+
+// GF1 DMA upload as the Gravis SDK does it on a 16-bit channel with 8-bit samples: reg 42h =
+// DMA address, reg 41h = control (enable, 16-bit channel, terminal count interrupt)
+task dma_upload(input integer pct, input integer lat, input [15:0] reg42, input integer words, input [7:0] salt);
+	reg [19:0] lin;
+begin
+	busy_pct = pct;
+	lat_max  = lat;
+	for (n = 0; n < words; n = n + 1) dma_pattern[n] = {8'(2*n+1) ^ salt, 8'(2*n) ^ salt};
+	dma_idx = 0; dma_words_done = 0;
+	io_wr(16'h240, 8'h08);                 // mix control: enable the IRQ/DMA latches
+	io_wr(16'h343, 8'h42);
+	io_wr(16'h344, reg42[7:0]);
+	io_wr(16'h345, reg42[15:8]);
+	dma_left = words;
+	io_wr(16'h343, 8'h41);
+	io_wr(16'h345, 8'h25);                 // enable | 16-bit channel | TC interrupt
+	guard = 0;
+	while (!irq && guard < 400000) begin @(posedge clk); guard = guard + 1; end
+	if (!irq) begin
+		errors = errors + 1;
+		$display("  DMA upload busy %0d%% latency <=%0d: NO INTERRUPT after %0d clocks; words taken %0d of %0d, drq %b",
+		         pct, lat, guard, dma_words_done, words, dma_req);
+	end
+	else begin
+		repeat (400) @(posedge clk);       // the last word is written after the terminal count
+		io_rd(16'h246, st246);
+		io_wr(16'h343, 8'h41);
+		io_rd(16'h345, st41);
+		$display("  DMA upload busy %0d%% latency <=%0d: interrupt after %0d clocks, words %0d, status 246h=%02h reg41h=%02h",
+		         pct, lat, guard, dma_words_done, st246, st41);
+		if (!st246[7] || !st41[6]) begin errors = errors + 1; $display("  status bits wrong"); end
+	end
+	io_wr(16'h343, 8'h41);
+	io_wr(16'h345, 8'h00);                 // DMA off
+	// the bytes, read back through the peek register: word address a covers linear bytes
+	// {a[19:18], a[16:0], 0} and the next
+	lin = {reg42[15:14], reg42[12:0], 4'h0, 1'b0};
+	for (n = 0; n < 2*words; n = n + 1) begin
+		peek(lin + n, v);
+		if (v !== (8'(n) ^ salt)) begin
+			errors = errors + 1;
+			if (errors < 40) $display("    byte %0d at %05h: read %02h, expected %02h", n, lin + n, v, 8'(n) ^ salt);
+		end
+	end
+end
+endtask
 reg  [7:0] v;
 reg [19:0] ta [0:11];
 reg [19:0] pa;
@@ -291,6 +369,24 @@ initial begin
 	run_pass(0, 12, 8'h11);      // DDR3-like latency
 	run_pass(30, 12, 8'h22);     // with waitrequest
 	run_pass(60, 40, 8'h33);     // a busy port
+
+	// register reads: what the bus sees one clock after the wait ends (z486's adapter) against
+	// the first clock without wait (ao486's bus)
+	busy_pct = 30; lat_max = 12;
+	io_wr(16'h342, 8'h00);                              // voice 0
+	io_wr(16'h343, 8'h8F); io_rd(16'h345, v); $display("read 8Fh (IRQ source) at 345h: late %02h, early %02h", v, early);
+	io_wr(16'h343, 8'h80); io_rd(16'h345, v); $display("read 80h (voice control) at 345h: late %02h, early %02h", v, early);
+	io_wr(16'h343, 8'h8D); io_rd(16'h345, v); $display("read 8Dh (ramp control) at 345h: late %02h, early %02h", v, early);
+	io_wr(16'h343, 8'h8A); io_rd(16'h344, v); $display("read 8Ah (current address high) low byte at 344h: late %02h, early %02h", v, early);
+	io_wr(16'h343, 8'h4C); io_rd(16'h345, v); $display("read 4Ch at 345h: late %02h, early %02h", v, early);
+	io_wr(16'h343, 8'h4C); io_rd(16'h344, v); $display("read 4Ch at 344h: late %02h, early %02h", v, early);
+	io_rd(16'h246, v); $display("read 246h (IRQ status): late %02h, early %02h", v, early);
+
+	dma_upload(0, 1, 16'h0010, 16, 8'h00);
+	dma_upload(0, 12, 16'h0020, 16, 8'h40);
+	dma_upload(30, 12, 16'h0030, 16, 8'h80);
+	dma_upload(60, 40, 16'h0040, 16, 8'hC0);
+	$display("after the DMA uploads: %0d errors", errors);
 
 	// chip clock: nominal number of transitions per second while the memory is slow
 	busy_pct = 30; lat_max = 12;
