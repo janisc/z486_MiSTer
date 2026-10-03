@@ -95,7 +95,7 @@ Send a single command with `simctl.py`:
 ./simctl.py status
 ./simctl.py mouse -20 -40 0
 ./simctl.py key enter
-./simctl.py screenshot /tmp/z386.png
+./simctl.py screenshot /tmp/z486.png
 ./simctl.py checkpoint
 ```
 

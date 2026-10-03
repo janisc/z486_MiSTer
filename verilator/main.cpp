@@ -241,6 +241,7 @@ static bool g_ide_debug = true;
 static bool g_zsst_debug = false;
 static FILE* g_zsst_write_trace = nullptr;
 static bool record_audio = false;
+static std::string record_path = "dsp.wav";
 static Pixel screenbuffer[H_RES * V_RES]{};
 static Pixel presentbuffer[H_RES * V_RES]{};
 
@@ -1012,7 +1013,7 @@ static void configure_cmos(bool hdd0_present, bool floppy0_present, const Floppy
 	// RTC seed: fixed 2024-01-01 00:00:00 UTC, matching ao486-sim's CMOS seed.
 	// Must NOT use the host wall-clock — otherwise every run is non-deterministic
 	// AND diverges from ao486-sim (whose clock starts at 00:00:00), contaminating
-	// every INT 1Ah time read in the z386<->ao486 CS:EIP diff. gmtime_r keeps it
+	// every INT 1Ah time read in the z486<->ao486 CS:EIP diff. gmtime_r keeps it
 	// timezone-independent.
 	std::time_t now = (std::time_t)1704067200;  // 2024-01-01 00:00:00 UTC
 	std::tm tm{};
@@ -1195,7 +1196,7 @@ static bool dump_vga_planes(const fs::path& path) {
 }
 
 static void usage() {
-	cout << "Usage: Vz486_mister_sim [--trace] [--trace-start sim_time] [--trace-file path] [--headless] [--end sim_time] [--disk path] [--cdrom iso] [--floppy path] [--boot0 path] [--boot1 path] [--ram-mb 16|32|64|128] [--cpu-speed full|56|30|15] [--cpu-speed-at sim_time:full|56|30|15] [--opl2|--opl3] [--variable-vsync] [--vga-border|--no-vga-border] [--fb-bgr|--fb-rgb] [--fb-1555|--fb-565] [--enter-at sim_time] [--key-at sim_time:key] [--key-down-at sim_time:key] [--key-up-at sim_time:key] [--key-on-text substring:key] [--mouse-at sim_time:dx:dy[:buttons]] [--control-port N] [--control-bind IPv4] [--ctrl-alt-del-at sim_time] [--screen-at sim_time] [--vga-plane-at sim_time:path] [--log-eip CS:EIP] [--screenshot-dir path] [--screenshot-interval sim_time] [--stop-on-text substring] [--no-ide] [--zsst-debug] [--zsst-write-trace path] [--record] [--checkpoint-dir path] [--checkpoint-interval-sec N] [--checkpoint-keep N] [--restore path]  (all times are sim_time = 2*cycle; mouse buttons are bits L/R/M)\n";
+	cout << "Usage: Vz486_mister_sim [--trace] [--trace-start sim_time] [--trace-file path] [--headless] [--end sim_time] [--disk path] [--cdrom iso] [--floppy path] [--boot0 path] [--boot1 path] [--ram-mb 16|32|64|128] [--cpu-speed full|56|30|15] [--cpu-speed-at sim_time:full|56|30|15] [--opl2|--opl3] [--variable-vsync] [--vga-border|--no-vga-border] [--fb-bgr|--fb-rgb] [--fb-1555|--fb-565] [--enter-at sim_time] [--key-at sim_time:key] [--key-down-at sim_time:key] [--key-up-at sim_time:key] [--key-on-text substring:key] [--mouse-at sim_time:dx:dy[:buttons]] [--control-port N] [--control-bind IPv4] [--ctrl-alt-del-at sim_time] [--screen-at sim_time] [--vga-plane-at sim_time:path] [--log-eip CS:EIP] [--screenshot-dir path] [--screenshot-interval sim_time] [--stop-on-text substring] [--no-ide] [--zsst-debug] [--zsst-write-trace path] [--record] [--record-file path] [--load-ram path] [--checkpoint-dir path] [--checkpoint-interval-sec N] [--checkpoint-keep N] [--restore path]  (all times are sim_time = 2*cycle; mouse buttons are bits L/R/M)\n";
 }
 
 int main(int argc, char** argv) {
@@ -1224,6 +1225,7 @@ int main(int argc, char** argv) {
 	uint64_t screenshot_interval_cycles = 0;
 	uint64_t next_screenshot_cycle = 0;
 	string stop_on_text;
+	string load_ram_path;
 	string zsst_write_trace_path;
 	unsigned ram_mb = 16;
 	bool ram_mb_explicit = false;
@@ -1462,6 +1464,11 @@ int main(int argc, char** argv) {
 			zsst_write_trace_path = argv[++i];
 		} else if (arg == "--record") {
 			record_audio = true;
+		} else if (arg == "--record-file" && i + 1 < argc) {
+			record_audio = true;
+			record_path = argv[++i];
+		} else if (arg == "--load-ram" && i + 1 < argc) {
+			load_ram_path = argv[++i];
 		} else if (arg == "--trace-on-flatline") {
 			arm_trace_on_flatline = true;
 			enable_trace = true;
@@ -1677,13 +1684,41 @@ int main(int argc, char** argv) {
 	tb.mgmt_writedata = 0;
 
 	if (record_audio) {
-		wav_writer = new WAVWriter("dsp.wav", AUDIO_SAMPLE_RATE, 2, 16);
-		cout << "Recording mixed audio to dsp.wav at " << AUDIO_SAMPLE_RATE << " Hz\n";
+		wav_writer = new WAVWriter(record_path.c_str(), AUDIO_SAMPLE_RATE, 2, 16);
+		cout << "Recording mixed audio to " << record_path << " at " << AUDIO_SAMPLE_RATE << " Hz\n";
 	}
 
 	if (restore_path.empty()) {
 		stage_roms_to_ddr(boot0, boot1);
+		if (!load_ram_path.empty()) {
+			// A whole-memory image (an architectural snapshot's RAM with its
+			// BIOS and restore stub) replaces the staged ROMs and RAM.
+			try {
+				const vector<uint8_t> image = read_file(load_ram_path);
+				// The boot copier moves 0xC0000-0xFFFFF from DDR into SDRAM
+				// (and its BIOS mirror at 0xFC0000); the rest goes straight
+				// into the SDRAM model.
+				ddr_write(0, image);
+				auto& guest = tb.z486_mister_sim->simulated_de10_guest_memory__DOT__memory__DOT__mem;
+				const size_t limit = std::min<size_t>(image.size(), 0xFC0000);
+				for (size_t a = 0; a + 1 < limit; a += 2) {
+					if (a >= 0xC0000 && a < 0x100000) continue;
+					guest[a >> 1] =
+						static_cast<uint16_t>(image[a] | (image[a + 1] << 8));
+				}
+				cout << "Loaded " << image.size() << " bytes of RAM from " << load_ram_path
+				     << " (UMA window writable)\n";
+			} catch (const std::exception& e) {
+				cerr << e.what() << "\n";
+				return 1;
+			}
+		}
 		full_step();
+		if (!load_ram_path.empty()) {
+			// The snapshot's BIOS keeps state in its shadow (UMA) window. Set
+			// after the first evaluation, which applies the reg's initializer.
+			tb.z486_mister_sim->system_i->z486_cpu__DOT__memory_inst__DOT__cache_unit_inst__DOT__dcache_inst__DOT__sim_uma_rom_writable = 1;
+		}
 		tb.reset = 0;
 		full_step();
 		configure_x86_management(ide0.present(), floppy0, floppy0.present());
@@ -2590,6 +2625,12 @@ int main(int argc, char** argv) {
 	if (sdl_window) SDL_DestroyWindow(sdl_window);
 	if (!g_headless) SDL_Quit();
 
+	if (!load_ram_path.empty()) {
+		// A loaded snapshot starts past POST; the caller checks its own result.
+		cout << "Snapshot run finished" << (saw_video_sync ? " with active video sync" : "") << "\n";
+		dump_nonempty_rows(current_text_screen());
+		return saw_first_instruction ? 0 : 2;
+	}
 	if (!saw_first_instruction || !saw_post || !saw_video_sync) {
 		cerr << "wrapper boot milestone not reached"
 		     << " first_instruction=" << saw_first_instruction
