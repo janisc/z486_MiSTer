@@ -296,7 +296,9 @@ set_global_assignment -name SYSTEMVERILOG_FILE z486_mister.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/z486/z486_pkg.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/z486/ucode_rom.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/z486/microsequencer.sv
+set_global_assignment -name SYSTEMVERILOG_FILE src/z486/event_control.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/z486/hardwired_control.sv
+set_global_assignment -name SYSTEMVERILOG_FILE src/z486/data_access.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/z486/cpu_throttle.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/z486/interrupt_controller.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/z486/data_unit.sv
@@ -308,6 +310,8 @@ set_global_assignment -name SYSTEMVERILOG_FILE src/z486/alu_alt.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/z486/decoder.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/z486/dsp_mul.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/z486/memory.sv
+set_global_assignment -name SYSTEMVERILOG_FILE src/z486/bus_unit.sv
+set_global_assignment -name SYSTEMVERILOG_FILE src/z486/cache_unit.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/z486/l1_cache.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/z486/l1_icache.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/z486/paging_tlb.sv
