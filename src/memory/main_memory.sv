@@ -7,8 +7,11 @@ module main_memory (
     input      [31:0] cpu_din,
     output reg [31:0] cpu_dout,
     output            cpu_resp_valid,   // read data available (pulse)
+    output    [127:0] cpu_line_dout,
+    output            cpu_line_resp_valid,
     input      [3:0]  cpu_be,           // byte enable for writes, assumed consecutive 1's
     input      [7:0]  cpu_burstcount,   // burst count for reads
+    input             cpu_line_read,    // complete cache-line request
     output            cpu_ready,        // accepted this cycle
     input             cpu_valid,        // request valid
     input             cpu_write,        // 1=write, 0=read
@@ -19,8 +22,11 @@ module main_memory (
     output     [31:0] mem_din,
     input      [31:0] mem_dout,
     input             mem_resp_valid,
+    input     [127:0] mem_line_dout,
+    input             mem_line_resp_valid,
     output     [3:0]  mem_be,
     output     [7:0]  mem_burstcount,
+    output            mem_line_read,
     input             mem_ready,        // SDRAM accepted this request
     output            mem_valid,        // held until ready
     output            mem_write,        // 1=write, 0=read
@@ -77,6 +83,7 @@ assign mem_addr       = cpu_addr;
 assign mem_din        = cpu_din;
 assign mem_be         = cpu_be;
 assign mem_burstcount = cpu_burstcount;
+assign mem_line_read  = cpu_line_read;
 assign mem_valid      = cpu_valid && !vga_rgn && !vga_busy && ram_address_in_range(cpu_addr, ram_size);
 assign mem_write      = cpu_write;
 
@@ -85,6 +92,8 @@ assign cpu_ready      = mem_ready | vga_accepted |
                         (cpu_valid && !vga_rgn && !ram_address_in_range(cpu_addr, ram_size) && state == IDLE);
 assign cpu_resp_valid = mem_resp_valid | vga_dout_ready;
 assign cpu_dout       = vga_dout_ready ? vga_dout : mem_dout;
+assign cpu_line_dout = mem_line_dout;
+assign cpu_line_resp_valid = mem_line_resp_valid;
 
 logic [2:0] state;
 localparam IDLE = 0;

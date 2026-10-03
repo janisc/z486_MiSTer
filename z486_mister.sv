@@ -607,14 +607,73 @@ hps_ext hps_ext
     .ext_hotswap       (status[39:38])
 );
 
+wire guest_mem_busy;
+wire [31:0] guest_mem0_addr;
+wire [31:0] guest_mem0_din;
+wire [31:0] guest_mem0_dout;
+wire        guest_mem0_resp_valid;
+wire  [3:0] guest_mem0_be;
+wire  [7:0] guest_mem0_burstcount;
+wire        guest_mem0_ready;
+wire        guest_mem0_valid;
+wire        guest_mem0_write;
+wire [31:0] guest_mem1_addr;
+wire [31:0] guest_mem1_din;
+wire [31:0] guest_mem1_dout;
+wire        guest_mem1_resp_valid;
+wire  [3:0] guest_mem1_be;
+wire  [7:0] guest_mem1_burstcount;
+wire        guest_mem1_ready;
+wire        guest_mem1_valid;
+wire        guest_mem1_write;
+
+split_sdram_backend #(
+	.FREQ(CLOCK_RATE_HZ),
+	.HAS_DQM(1'b0),
+	.FAST_GRADE(1'b1)
+) de10_guest_memory (
+	.clk(clk_sys),
+	.reset(reset_sync_r[2]),
+	.refresh_allowed(1'b1),
+	.sdram_size(sdram_sz[1:0]),
+	.busy(guest_mem_busy),
+	.mem0_valid(guest_mem0_valid),
+	.mem0_ready(guest_mem0_ready),
+	.mem0_write(guest_mem0_write),
+	.mem0_addr(guest_mem0_addr),
+	.mem0_din(guest_mem0_din),
+	.mem0_dout(guest_mem0_dout),
+	.mem0_resp_valid(guest_mem0_resp_valid),
+	.mem0_be(guest_mem0_be),
+	.mem0_burstcount(guest_mem0_burstcount),
+	.mem1_valid(guest_mem1_valid),
+	.mem1_ready(guest_mem1_ready),
+	.mem1_write(guest_mem1_write),
+	.mem1_addr(guest_mem1_addr),
+	.mem1_din(guest_mem1_din),
+	.mem1_dout(guest_mem1_dout),
+	.mem1_resp_valid(guest_mem1_resp_valid),
+	.mem1_be(guest_mem1_be),
+	.mem1_burstcount(guest_mem1_burstcount),
+	.sdram_dq(SDRAM_DQ),
+	.sdram_a(SDRAM_A),
+	.sdram_ba(SDRAM_BA),
+	.sdram_dqm({SDRAM_DQMH, SDRAM_DQML}),
+	.sdram_nwe(SDRAM_nWE),
+	.sdram_nras(SDRAM_nRAS),
+	.sdram_ncas(SDRAM_nCAS),
+	.sdram_ncs(SDRAM_nCS),
+	.sdram_cke(SDRAM_CKE)
+);
+
 system #(
 	.SYS_FREQ(CLOCK_RATE_HZ),
-	.SDRAM_HAS_DQM(1'b0),
-	.SDRAM_FAST_GRADE(1'b1),
 	.DCACHE_SET_BITS(DCACHE_SET_BITS),
 	.ICACHE_SET_BITS(ICACHE_SET_BITS),
 	.ENABLE_X87(ENABLE_X87),
-	.ENABLE_CMS(ENABLE_CMS)
+	.ENABLE_CMS(ENABLE_CMS),
+	// DE10-Nano deliberately remains the PC-only build.
+	.ENABLE_VOODOO(1'b0)
 ) core (
 	.clk_sys             (clk_sys),
 	.reset               (reset_sync_r[2]),
@@ -640,16 +699,28 @@ system #(
 	.mgmt_write          (mgmt_wr),
 	.mgmt_writedata      (mgmt_dout),
 
-	.sdram_dq            (SDRAM_DQ),
-	.sdram_a             (SDRAM_A),
-	.sdram_ba            (SDRAM_BA),
-	.sdram_dqm           ({SDRAM_DQMH, SDRAM_DQML}),
-	.sdram_nwe           (SDRAM_nWE),
-	.sdram_nras          (SDRAM_nRAS),
-	.sdram_ncas          (SDRAM_nCAS),
-	.sdram_ncs           (SDRAM_nCS),
-	.sdram_cke           (SDRAM_CKE),
-	.refresh_allowed     (1'b1),
+	.ext_mem_busy        (guest_mem_busy),
+	.ext_mem0_addr       (guest_mem0_addr),
+	.ext_mem0_din        (guest_mem0_din),
+	.ext_mem0_dout       (guest_mem0_dout),
+	.ext_mem0_resp_valid (guest_mem0_resp_valid),
+	.ext_mem0_line_dout  (128'd0),
+	.ext_mem0_line_resp_valid(1'b0),
+	.ext_mem0_be         (guest_mem0_be),
+	.ext_mem0_burstcount (guest_mem0_burstcount),
+	.ext_mem0_line_read  (),
+	.ext_mem0_ready      (guest_mem0_ready),
+	.ext_mem0_valid      (guest_mem0_valid),
+	.ext_mem0_write      (guest_mem0_write),
+	.ext_mem1_addr       (guest_mem1_addr),
+	.ext_mem1_din        (guest_mem1_din),
+	.ext_mem1_dout       (guest_mem1_dout),
+	.ext_mem1_resp_valid (guest_mem1_resp_valid),
+	.ext_mem1_be         (guest_mem1_be),
+	.ext_mem1_burstcount (guest_mem1_burstcount),
+	.ext_mem1_ready      (guest_mem1_ready),
+	.ext_mem1_valid      (guest_mem1_valid),
+	.ext_mem1_write      (guest_mem1_write),
 
 	.ddram_busy          (DDRAM_BUSY),
 	.ddram_burstcnt      (DDRAM_BURSTCNT),
@@ -696,6 +767,18 @@ system #(
 	.mouse_data_valid    (1'b0),
 	.mouse_host_cmd      (unused_mouse_host_cmd),
 	.mouse_host_cmd_clear(1'b0),
+	.zsst_host_req_valid (),
+	.zsst_host_req_ready (1'b0),
+	.zsst_host_address   (),
+	.zsst_host_writedata (),
+	.zsst_host_byteenable(),
+	.zsst_host_write     (),
+	.zsst_host_rsp_valid (1'b0),
+	.zsst_host_rsp_ready (),
+	.zsst_host_readdata  (32'd0),
+	.zsst_host_error     (1'b0),
+	.zsst_memory_enable  (),
+	.zsst_init_enable    (),
 
 	.dbg_uart_byte       (core_dbg_uart_byte),
 	.dbg_uart_we         (core_dbg_uart_we),
@@ -727,7 +810,6 @@ system #(
 
 	.bootcfg             (status[37:32]),
 	.ram_size            (configured_ram_size),
-	.sdram_size          (sdram_sz[1:0]),
 	.uma_ram             (1'b0),
 	.cpu_speed_osd      (cpu_speed_osd),
 	.syscfg              (),
@@ -750,6 +832,14 @@ system #(
 	.video_fb_native     (fb_native),
 	.video_fb_bpp        (fb_bpp),
 	.video_dac_565       (video_dac_565),
+	.video_scanline_req  (1'b0),
+	.video_scanline_ready(),
+	.video_scanline_frame_start(1'b0),
+	.video_scanline_y    (11'd0),
+	.video_scanline_width(),
+	.video_scanline_height(),
+	.video_native_frames(),
+	.video_scanline_done (),
 
 	// SVGA framebuffer descriptor (vga.v) -> MiSTer HPS framebuffer (below)
 	.video_start_addr    (vga_start_addr),

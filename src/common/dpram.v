@@ -75,7 +75,68 @@ module dpram_difclk
     wire wren_a_i   = (wren_a   == 1'b1);
     wire wren_b_i   = (wren_b   == 1'b1);
 
-`ifdef ALTERA_RESERVED_QIS
+`ifdef Z486_XILINX
+    // Xilinx synthesis does not recognize the mixed registered-address /
+    // asynchronous-data template below as a dual-clock RAM. XPM expresses the
+    // same one-clock read latency and no-change-on-write behavior explicitly.
+    xpm_memory_tdpram #(
+        .ADDR_WIDTH_A(ADRW),
+        .ADDR_WIDTH_B(ADRW),
+        .AUTO_SLEEP_TIME(0),
+        .BYTE_WRITE_WIDTH_A(DATW),
+        .BYTE_WRITE_WIDTH_B(DATW),
+        .CLOCKING_MODE("independent_clock"),
+        .ECC_MODE("no_ecc"),
+        .MEMORY_INIT_FILE(FILE == "" ? "none" : FILE),
+        .MEMORY_INIT_PARAM(""),
+        .MEMORY_OPTIMIZATION("true"),
+        .MEMORY_PRIMITIVE("auto"),
+        .MEMORY_SIZE(DATW * (1 << ADRW)),
+        .MESSAGE_CONTROL(0),
+        .READ_DATA_WIDTH_A(DATW),
+        .READ_DATA_WIDTH_B(DATW),
+        .READ_LATENCY_A(1),
+        .READ_LATENCY_B(1),
+        .READ_RESET_VALUE_A("0"),
+        .READ_RESET_VALUE_B("0"),
+        .RST_MODE_A("SYNC"),
+        .RST_MODE_B("SYNC"),
+        .SIM_ASSERT_CHK(0),
+        .USE_EMBEDDED_CONSTRAINT(0),
+        .USE_MEM_INIT(1),
+        .WAKEUP_TIME("disable_sleep"),
+        .WRITE_DATA_WIDTH_A(DATW),
+        .WRITE_DATA_WIDTH_B(DATW),
+        .WRITE_MODE_A("no_change"),
+        .WRITE_MODE_B("no_change")
+    ) ram (
+        .clka(clk_a),
+        .ena(enable_a_i),
+        .wea(wren_a_i),
+        .addra(address_a),
+        .dina(data_a),
+        .douta(q_a),
+        .regcea(1'b1),
+        .rsta(1'b0),
+        .clkb(clk_b),
+        .enb(enable_b_i),
+        .web(wren_b_i),
+        .addrb(address_b),
+        .dinb(data_b),
+        .doutb(q_b),
+        .regceb(1'b1),
+        .rstb(1'b0),
+        .sleep(1'b0),
+        .injectsbiterra(1'b0),
+        .injectdbiterra(1'b0),
+        .injectsbiterrb(1'b0),
+        .injectdbiterrb(1'b0),
+        .sbiterra(),
+        .dbiterra(),
+        .sbiterrb(),
+        .dbiterrb()
+    );
+`elsif ALTERA_RESERVED_QIS
     wire [DATW-1:0] q_a_int;
     wire [DATW-1:0] q_b_int;
     assign q_a = q_a_int;

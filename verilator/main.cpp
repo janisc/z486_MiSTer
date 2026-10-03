@@ -21,6 +21,7 @@
 #include <iostream>
 #include <limits>
 #include <map>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -30,6 +31,7 @@
 #include "ide_hps.h"
 #include "control_server.h"
 #include "wav_writer.h"
+#include "zsst_profile.h"
 
 using std::cerr;
 using std::cout;
@@ -60,6 +62,7 @@ struct Pixel {
 };
 
 static Vz486_mister_sim tb;
+static ZsstProfile<Vz486_mister_sim_z486_mister_sim> zsst_profile;
 static VerilatedFstC* trace = nullptr;
 static vluint64_t sim_time = 0;
 uint64_t g_ide_time = 0;
@@ -93,6 +96,26 @@ static uint64_t ddram_resp_data = 0;
 static constexpr uint64_t FB_BASE_BYTE = 0x3F800000ull;
 static constexpr size_t   FB_MEM_SIZE  = 4 * 1024 * 1024;   // 64 banks * 64KB
 static std::vector<uint8_t> fb_mem(FB_MEM_SIZE, 0);
+// KV260 backend simulation uses the same checkpointed DDR/packed-VGA backing
+// as ROM staging. These calls model physical DDR, not coherent cache probes.
+extern "C" uint32_t kv260_memory_read(uint32_t address) {
+	uint32_t value = 0;
+	for (unsigned b = 0; b < 4; ++b) {
+		uint32_t a = address + b;
+		uint8_t byte = a < ddram_mem.size() ? ddram_mem[a] :
+			(a >= 0x0f800000 && a - 0x0f800000 < fb_mem.size() ? fb_mem[a - 0x0f800000] : 0);
+		value |= uint32_t(byte) << (b * 8);
+	}
+	return value;
+}
+extern "C" void kv260_memory_write(uint32_t address, uint32_t data, uint32_t mask) {
+	for (unsigned b = 0; b < 4; ++b) if (mask & (1u << b)) {
+		uint32_t a = address + b;
+		if (a < ddram_mem.size()) ddram_mem[a] = uint8_t(data >> (b * 8));
+		else if (a >= 0x0f800000 && a - 0x0f800000 < fb_mem.size())
+			fb_mem[a - 0x0f800000] = uint8_t(data >> (b * 8));
+	}
+}
 static std::array<Pixel, 256> fb_palette = [] {
 	std::array<Pixel, 256> palette{};
 	palette.fill(Pixel{0xff, 0x00, 0x00, 0x00});
@@ -100,6 +123,8 @@ static std::array<Pixel, 256> fb_palette = [] {
 }();
 static bool fb_1555 = true;
 static bool fb_bgr = true;
+static constexpr size_t ZSST_MEM_SIZE = 16 * 1024 * 1024;
+static std::vector<uint8_t> zsst_mem(ZSST_MEM_SIZE, 0);
 
 static uint8_t expand_dac_color(uint8_t value) {
 	return static_cast<uint8_t>((value << 2) | (value >> 4));
@@ -155,6 +180,41 @@ static bool render_svga_frame(Pixel* pixels, int& width, int& height) {
 	return true;
 }
 
+static bool render_zsst_frame(Pixel* pixels, int& width, int& height) {
+	if (!tb.dbg_zsst_video_active)
+		return false;
+
+	const int fb_width = std::min<int>(tb.dbg_zsst_width, H_RES);
+	const int fb_height = std::min<int>(tb.dbg_zsst_height, V_RES);
+	const size_t stride = tb.dbg_zsst_stride;
+	const size_t base = tb.dbg_zsst_displayed_buffer & 1
+		? static_cast<size_t>(tb.dbg_zsst_buffer_size) : 0;
+	if (fb_width <= 0 || fb_height <= 0 || stride == 0 || base >= zsst_mem.size())
+		return false;
+	const size_t last_row = base + static_cast<size_t>(fb_height - 1) * stride;
+	const size_t row_bytes = static_cast<size_t>(fb_width) * 2;
+	if (last_row >= zsst_mem.size() || row_bytes > zsst_mem.size() - last_row)
+		return false;
+
+	for (int y = 0; y < fb_height; ++y) {
+		const size_t row = base + static_cast<size_t>(y) * stride;
+		for (int x = 0; x < fb_width; ++x) {
+			const size_t offset = row + static_cast<size_t>(x) * 2;
+			const uint16_t packed = static_cast<uint16_t>(zsst_mem[offset]) |
+			                        (static_cast<uint16_t>(zsst_mem[offset + 1]) << 8);
+			pixels[y * H_RES + x] = Pixel{
+				0xff,
+				static_cast<uint8_t>((packed & 0x1f) * 255 / 31),
+				static_cast<uint8_t>(((packed >> 5) & 0x3f) * 255 / 63),
+				static_cast<uint8_t>(((packed >> 11) & 0x1f) * 255 / 31),
+			};
+		}
+	}
+	width = fb_width;
+	height = fb_height;
+	return true;
+}
+
 struct ScheduledPs2Bytes {
 	uint64_t cycle;
 	std::vector<uint8_t> bytes;
@@ -178,7 +238,10 @@ static std::vector<uint64_t> screen_check_cycles;
 static size_t next_screen_check = 0;
 static bool g_headless = false;
 static bool g_ide_debug = true;
+static bool g_zsst_debug = false;
+static FILE* g_zsst_write_trace = nullptr;
 static bool record_audio = false;
+static std::string record_path = "dsp.wav";
 static Pixel screenbuffer[H_RES * V_RES]{};
 static Pixel presentbuffer[H_RES * V_RES]{};
 
@@ -635,7 +698,7 @@ static std::string current_text_screen() {
 	uint16_t row_addr = start + byte_panning;
 	for (int row = 0; row < 25; ++row) {
 		for (uint16_t col = 0; col < cols; ++col) {
-			uint8_t ch = sys->__PVT__vga_inst__DOT__plane_ram_0__DOT__mem[static_cast<uint16_t>(row_addr + (col << 1))];
+			uint8_t ch = sys->__PVT__vga_inst__DOT__plane_ram_0__DOT__default_ram__DOT__ram__DOT__mem[static_cast<uint16_t>(row_addr + (col << 1))];
 			if (ch < 0x20 || ch > 0x7e) ch = ' ';
 			text.push_back(static_cast<char>(ch));
 		}
@@ -701,6 +764,30 @@ static void step() {
 		}
 	}
 	if (posedge) {
+		zsst_profile.sample(tb.z486_mister_sim, sim_time,
+		                    tb.dbg_cs_base + tb.dbg_eip, tb.dbg_zsst_host_reads);
+		if (tb.dbg_zsst_mem_write_valid &&
+		    tb.dbg_zsst_mem_write_address < zsst_mem.size()) {
+			const size_t address = tb.dbg_zsst_mem_write_address;
+			for (unsigned lane = 0; lane < 16; ++lane) {
+				if ((tb.dbg_zsst_mem_write_strobe >> lane) & 1) {
+					const size_t offset = address + lane;
+					if (offset < zsst_mem.size())
+						zsst_mem[offset] = static_cast<uint8_t>(
+							tb.dbg_zsst_mem_write_data[lane >> 2] >>
+							((lane & 3) * 8));
+				}
+			}
+		}
+
+		if (g_zsst_write_trace && tb.dbg_zsst_event_valid &&
+		    tb.dbg_zsst_event_write) {
+			fprintf(g_zsst_write_trace, "W %06x %08x %x\n",
+			        static_cast<unsigned>(tb.dbg_zsst_event_address),
+			        static_cast<unsigned>(tb.dbg_zsst_event_data),
+			        static_cast<unsigned>(tb.dbg_zsst_event_be));
+		}
+
 		static bool have_syscfg = false;
 		static uint8_t last_syscfg = 0;
 		if (!have_syscfg || tb.dbg_syscfg != last_syscfg) {
@@ -711,6 +798,86 @@ static void step() {
 			        static_cast<unsigned>(last_syscfg),
 			        (last_syscfg & 0x80) ? "DOS" : "OSD",
 			        static_cast<unsigned>(last_syscfg & 0x03));
+		}
+
+		if (g_zsst_debug) {
+			static bool have_zsst_state = false;
+			static bool last_memory_enable = false;
+			static bool last_video_active = false;
+			static uint32_t last_init_enable = 0;
+			static uint32_t last_host_reads = 0;
+			static uint32_t last_host_writes = 0;
+			static uint32_t last_memory_reads = 0;
+			static uint32_t last_memory_writes = 0;
+			static uint32_t last_pci_reads = 0;
+			static uint32_t last_pci_writes = 0;
+			const bool state_changed = !have_zsst_state ||
+				tb.dbg_zsst_memory_enable != last_memory_enable ||
+				tb.dbg_zsst_video_active != last_video_active ||
+				tb.dbg_zsst_init_enable != last_init_enable;
+			if (state_changed) {
+				fprintf(stderr,
+				        "%llu: zSST state memory=%u init=%08x video=%u\n",
+				        (unsigned long long)sim_time,
+				        static_cast<unsigned>(tb.dbg_zsst_memory_enable),
+				        static_cast<unsigned>(tb.dbg_zsst_init_enable),
+				        static_cast<unsigned>(tb.dbg_zsst_video_active));
+				have_zsst_state = true;
+				last_memory_enable = tb.dbg_zsst_memory_enable;
+				last_video_active = tb.dbg_zsst_video_active;
+				last_init_enable = tb.dbg_zsst_init_enable;
+			}
+
+			const uint64_t host_total = static_cast<uint64_t>(tb.dbg_zsst_host_reads) +
+			                            tb.dbg_zsst_host_writes;
+			if (tb.dbg_zsst_host_reads != last_host_reads ||
+			    tb.dbg_zsst_host_writes != last_host_writes) {
+				if (host_total <= 128 || (host_total & 1023) == 0) {
+					fprintf(stderr,
+					        "%llu: zSST host %s addr=%06x data=%08x "
+					        "reads=%u writes=%u\n",
+					        (unsigned long long)sim_time,
+					        tb.dbg_zsst_last_host_write ? "write" : "read",
+					        static_cast<unsigned>(tb.dbg_zsst_last_host_address),
+					        static_cast<unsigned>(tb.dbg_zsst_last_host_data),
+					        static_cast<unsigned>(tb.dbg_zsst_host_reads),
+					        static_cast<unsigned>(tb.dbg_zsst_host_writes));
+				}
+				last_host_reads = tb.dbg_zsst_host_reads;
+				last_host_writes = tb.dbg_zsst_host_writes;
+			}
+			if (tb.dbg_zsst_memory_reads != last_memory_reads ||
+			    tb.dbg_zsst_memory_writes != last_memory_writes) {
+				const uint64_t memory_total =
+					static_cast<uint64_t>(tb.dbg_zsst_memory_reads) +
+					tb.dbg_zsst_memory_writes;
+				if (memory_total <= 32 || (memory_total & 1023) == 0)
+					fprintf(stderr,
+					        "%llu: zSST memory reads=%u writes=%u\n",
+					        (unsigned long long)sim_time,
+					        static_cast<unsigned>(tb.dbg_zsst_memory_reads),
+					        static_cast<unsigned>(tb.dbg_zsst_memory_writes));
+				last_memory_reads = tb.dbg_zsst_memory_reads;
+				last_memory_writes = tb.dbg_zsst_memory_writes;
+			}
+			if (tb.dbg_zsst_pci_reads != last_pci_reads ||
+			    tb.dbg_zsst_pci_writes != last_pci_writes) {
+				const uint64_t pci_total = static_cast<uint64_t>(tb.dbg_zsst_pci_reads) +
+				                           tb.dbg_zsst_pci_writes;
+				if (pci_total <= 128 || (pci_total & 1023) == 0)
+					fprintf(stderr,
+					        "%llu: zSST PCI %s io=%04x data=%02x "
+					        "config=%08x reads=%u writes=%u\n",
+					        (unsigned long long)sim_time,
+					        tb.dbg_zsst_pci_last_write ? "write" : "read",
+					        static_cast<unsigned>(tb.dbg_zsst_pci_last_io_address),
+					        static_cast<unsigned>(tb.dbg_zsst_pci_last_writedata),
+					        static_cast<unsigned>(tb.dbg_zsst_pci_config_address),
+					        static_cast<unsigned>(tb.dbg_zsst_pci_reads),
+					        static_cast<unsigned>(tb.dbg_zsst_pci_writes));
+				last_pci_reads = tb.dbg_zsst_pci_reads;
+				last_pci_writes = tb.dbg_zsst_pci_writes;
+			}
 		}
 
 		// Audio-dropout detector: a frozen SB output sample = DMA underrun.
@@ -934,8 +1101,102 @@ static bool dump_screen_png(const fs::path& path, int width, int height) {
 	return true;
 }
 
+// Legacy 256-color VGA is held in four local 64 KiB planes, not in the DDR
+// framebuffer used by SVGA modes.  Decode the planes directly so a captured
+// image is independent of the VGA timing and scanout pipelines.
+static bool dump_vga_planes(const fs::path& path) {
+	auto* sys = tb.z486_mister_sim->system_i;
+	const uint8_t flags = tb.fb_flags;
+	if ((flags & 0x07) != 0x04) {
+		cerr << "VGA plane dump requires 256-color legacy VGA; flags="
+		     << std::hex << static_cast<unsigned>(flags) << std::dec << "\n";
+		return false;
+	}
+
+	const int width = std::min<int>(static_cast<int>(tb.fb_width) << 2, H_RES);
+	const int height = std::min<int>((flags & 0x08) ?
+		static_cast<int>(tb.fb_height) / 2 : static_cast<int>(tb.fb_height), V_RES);
+	const uint16_t base = static_cast<uint16_t>(tb.fb_start_addr << 2);
+	const uint16_t stride = static_cast<uint16_t>(tb.fb_stride << 3);
+	if (width <= 0 || height <= 0 || stride == 0) return false;
+
+	auto plane_byte = [&](unsigned plane, uint16_t address) -> uint8_t {
+		switch (plane) {
+		case 0: return sys->__PVT__vga_inst__DOT__plane_ram_0__DOT__default_ram__DOT__ram__DOT__mem[address];
+		case 1: return sys->__PVT__vga_inst__DOT__plane_ram_1__DOT__default_ram__DOT__ram__DOT__mem[address];
+		case 2: return sys->__PVT__vga_inst__DOT__plane_ram_2__DOT__default_ram__DOT__ram__DOT__mem[address];
+		default:return sys->__PVT__vga_inst__DOT__plane_ram_3__DOT__default_ram__DOT__ram__DOT__mem[address];
+		}
+	};
+	vector<Pixel> pixels(static_cast<size_t>(width) * height);
+	for (int y = 0; y < height; ++y) {
+		const uint16_t row = static_cast<uint16_t>(base + y * stride);
+		for (int x = 0; x < width; ++x) {
+			const uint16_t address = static_cast<uint16_t>(row + (x & ~3));
+			const uint8_t index = plane_byte(static_cast<unsigned>(x) & 3, address);
+			const uint32_t dac = sys->__PVT__vga_inst__DOT__dac_ram__DOT__mem[index];
+			pixels[static_cast<size_t>(y) * width + x] = Pixel{
+				0xff,
+				expand_dac_color(static_cast<uint8_t>(dac & 0x3f)),
+				expand_dac_color(static_cast<uint8_t>((dac >> 6) & 0x3f)),
+				expand_dac_color(static_cast<uint8_t>((dac >> 12) & 0x3f)),
+			};
+		}
+	}
+
+	FILE* file = fopen(path.c_str(), "wb");
+	if (!file) return false;
+	png_structp png = png_create_write_struct(PNG_LIBPNG_VER_STRING, nullptr, nullptr, nullptr);
+	png_infop info = png ? png_create_info_struct(png) : nullptr;
+	vector<uint8_t> png_row(static_cast<size_t>(width) * 3);
+	if (!png || !info || setjmp(png_jmpbuf(png))) {
+		if (png) png_destroy_write_struct(&png, info ? &info : nullptr);
+		fclose(file);
+		return false;
+	}
+	png_init_io(png, file);
+	png_set_IHDR(png, info, width, height, 8, PNG_COLOR_TYPE_RGB,
+	             PNG_INTERLACE_NONE, PNG_COMPRESSION_TYPE_DEFAULT,
+	             PNG_FILTER_TYPE_DEFAULT);
+	png_write_info(png, info);
+	for (int y = 0; y < height; ++y) {
+		for (int x = 0; x < width; ++x) {
+			const Pixel& pixel = pixels[static_cast<size_t>(y) * width + x];
+			png_row[x * 3 + 0] = pixel.r;
+			png_row[x * 3 + 1] = pixel.g;
+			png_row[x * 3 + 2] = pixel.b;
+		}
+		png_write_row(png, png_row.data());
+	}
+	png_write_end(png, nullptr);
+	png_destroy_write_struct(&png, &info);
+	fclose(file);
+
+	fs::path raw_path = path;
+	raw_path.replace_extension(".vga.bin");
+	std::ofstream raw(raw_path, ios::binary | ios::trunc);
+	if (!raw) return false;
+	const char magic[8] = {'Z','4','8','6','V','G','A','1'};
+	raw.write(magic, sizeof(magic));
+	const uint32_t metadata[] = {
+		static_cast<uint32_t>(width), static_cast<uint32_t>(height),
+		base, stride, flags
+	};
+	raw.write(reinterpret_cast<const char*>(metadata), sizeof(metadata));
+	for (unsigned plane = 0; plane < 4; ++plane)
+		for (unsigned address = 0; address < 65536; ++address) {
+			const uint8_t value = plane_byte(plane, static_cast<uint16_t>(address));
+			raw.write(reinterpret_cast<const char*>(&value), 1);
+		}
+	for (unsigned index = 0; index < 256; ++index) {
+		const uint32_t dac = sys->__PVT__vga_inst__DOT__dac_ram__DOT__mem[index];
+		raw.write(reinterpret_cast<const char*>(&dac), sizeof(dac));
+	}
+	return raw.good();
+}
+
 static void usage() {
-	cout << "Usage: Vz486_mister_sim [--trace] [--trace-start sim_time] [--trace-file path] [--headless] [--end sim_time] [--disk path] [--cdrom iso] [--floppy path] [--boot0 path] [--boot1 path] [--ram-mb 16|32|64|128] [--cpu-speed full|56|30|15] [--cpu-speed-at sim_time:full|56|30|15] [--opl2|--opl3] [--variable-vsync] [--vga-border|--no-vga-border] [--fb-bgr|--fb-rgb] [--fb-1555|--fb-565] [--enter-at sim_time] [--key-at sim_time:key] [--key-down-at sim_time:key] [--key-up-at sim_time:key] [--key-on-text substring:key] [--mouse-at sim_time:dx:dy[:buttons]] [--control-port N] [--control-bind IPv4] [--ctrl-alt-del-at sim_time] [--screen-at sim_time] [--log-eip CS:EIP] [--screenshot-dir path] [--screenshot-interval sim_time] [--stop-on-text substring] [--no-ide] [--record] [--checkpoint-dir path] [--checkpoint-interval-sec N] [--checkpoint-keep N] [--restore path]  (all times are sim_time = 2*cycle; mouse buttons are bits L/R/M)\n";
+	cout << "Usage: Vz486_mister_sim [--trace] [--trace-start sim_time] [--trace-file path] [--headless] [--end sim_time] [--disk path] [--cdrom iso] [--floppy path] [--boot0 path] [--boot1 path] [--ram-mb 16|32|64|128] [--cpu-speed full|56|30|15] [--cpu-speed-at sim_time:full|56|30|15] [--opl2|--opl3] [--variable-vsync] [--vga-border|--no-vga-border] [--fb-bgr|--fb-rgb] [--fb-1555|--fb-565] [--enter-at sim_time] [--key-at sim_time:key] [--key-down-at sim_time:key] [--key-up-at sim_time:key] [--key-on-text substring:key] [--mouse-at sim_time:dx:dy[:buttons]] [--control-port N] [--control-bind IPv4] [--ctrl-alt-del-at sim_time] [--screen-at sim_time] [--vga-plane-at sim_time:path] [--log-eip CS:EIP] [--screenshot-dir path] [--screenshot-interval sim_time] [--stop-on-text substring] [--no-ide] [--zsst-debug] [--zsst-write-trace path] [--record] [--record-file path] [--load-ram path] [--checkpoint-dir path] [--checkpoint-interval-sec N] [--checkpoint-keep N] [--restore path]  (all times are sim_time = 2*cycle; mouse buttons are bits L/R/M)\n";
 }
 
 int main(int argc, char** argv) {
@@ -956,6 +1217,7 @@ int main(int argc, char** argv) {
 	vector<std::tuple<uint64_t, int, int, uint8_t>> mouse_packet_events;
 	vector<std::pair<uint64_t, unsigned>> cpu_speed_events;
 	vector<uint64_t> ctrl_alt_del_cycles;
+	vector<std::pair<uint64_t, fs::path>> vga_plane_events;
 	bool log_eip_enabled = false;
 	uint16_t log_eip_cs = 0;
 	uint32_t log_eip_offset = 0;
@@ -963,6 +1225,8 @@ int main(int argc, char** argv) {
 	uint64_t screenshot_interval_cycles = 0;
 	uint64_t next_screenshot_cycle = 0;
 	string stop_on_text;
+	string load_ram_path;
+	string zsst_write_trace_path;
 	unsigned ram_mb = 16;
 	bool ram_mb_explicit = false;
 	unsigned cpu_speed_status = 0;
@@ -1160,6 +1424,15 @@ int main(int argc, char** argv) {
 			ctrl_alt_del_cycles.push_back(std::stoull(argv[++i]) / 2);   // sim_time -> cycles
 		} else if (arg == "--screen-at" && i + 1 < argc) {
 			screen_check_cycles.push_back(std::stoull(argv[++i]) / 2);   // sim_time -> cycles
+		} else if (arg == "--vga-plane-at" && i + 1 < argc) {
+			string event = argv[++i];
+			size_t separator = event.find(':');
+			if (separator == string::npos || separator + 1 == event.size()) {
+				cerr << "--vga-plane-at requires sim_time:path\n";
+				return 1;
+			}
+			vga_plane_events.push_back({std::stoull(event.substr(0, separator)) / 2,
+			                            fs::path(event.substr(separator + 1))});
 		} else if (arg == "--log-eip" && i + 1 < argc) {
 			string marker = argv[++i];
 			size_t separator = marker.find(':');
@@ -1180,8 +1453,22 @@ int main(int argc, char** argv) {
 			g_ide_debug = true;
 		} else if (arg == "--no-ide") {
 			g_ide_debug = false;
+		} else if (arg == "--zsst-debug") {
+			g_zsst_debug = true;
+		} else if (arg == "--zsst-profile" && i + 1 < argc) {
+			if (!zsst_profile.open(argv[++i])) {
+				cerr << "cannot open zSST profile (requires Voodoo model)\n";
+				return 1;
+			}
+		} else if (arg == "--zsst-write-trace" && i + 1 < argc) {
+			zsst_write_trace_path = argv[++i];
 		} else if (arg == "--record") {
 			record_audio = true;
+		} else if (arg == "--record-file" && i + 1 < argc) {
+			record_audio = true;
+			record_path = argv[++i];
+		} else if (arg == "--load-ram" && i + 1 < argc) {
+			load_ram_path = argv[++i];
 		} else if (arg == "--trace-on-flatline") {
 			arm_trace_on_flatline = true;
 			enable_trace = true;
@@ -1212,6 +1499,15 @@ int main(int argc, char** argv) {
 		if (screenshot_interval_cycles == 0) screenshot_interval_cycles = 12500000;
 		fs::create_directories(screenshot_dir);
 		next_screenshot_cycle = screenshot_interval_cycles;
+	}
+	if (!zsst_write_trace_path.empty()) {
+		g_zsst_write_trace = fopen(zsst_write_trace_path.c_str(), "w");
+		if (!g_zsst_write_trace) {
+			cerr << "cannot open zSST write trace: " << zsst_write_trace_path << "\n";
+			return 1;
+		}
+		fprintf(g_zsst_write_trace,
+		        "# Accepted zSST host writes: operation address data byte-enable\n");
 	}
 	ControlServer control_server;
 	if (control_port != 0) {
@@ -1323,6 +1619,7 @@ int main(int argc, char** argv) {
 	int frame_line_max = 0;
 	uint64_t next_console_text_check = 0;
 	std::string last_console_text;
+	std::set<std::string> traced_console_markers;
 	size_t next_text_key_event = 0;
 	deque<fs::path> control_screenshot_requests;
 
@@ -1387,13 +1684,41 @@ int main(int argc, char** argv) {
 	tb.mgmt_writedata = 0;
 
 	if (record_audio) {
-		wav_writer = new WAVWriter("dsp.wav", AUDIO_SAMPLE_RATE, 2, 16);
-		cout << "Recording mixed audio to dsp.wav at " << AUDIO_SAMPLE_RATE << " Hz\n";
+		wav_writer = new WAVWriter(record_path.c_str(), AUDIO_SAMPLE_RATE, 2, 16);
+		cout << "Recording mixed audio to " << record_path << " at " << AUDIO_SAMPLE_RATE << " Hz\n";
 	}
 
 	if (restore_path.empty()) {
 		stage_roms_to_ddr(boot0, boot1);
+		if (!load_ram_path.empty()) {
+			// A whole-memory image (an architectural snapshot's RAM with its
+			// BIOS and restore stub) replaces the staged ROMs and RAM.
+			try {
+				const vector<uint8_t> image = read_file(load_ram_path);
+				// The boot copier moves 0xC0000-0xFFFFF from DDR into SDRAM
+				// (and its BIOS mirror at 0xFC0000); the rest goes straight
+				// into the SDRAM model.
+				ddr_write(0, image);
+				auto& guest = tb.z486_mister_sim->simulated_de10_guest_memory__DOT__memory__DOT__mem;
+				const size_t limit = std::min<size_t>(image.size(), 0xFC0000);
+				for (size_t a = 0; a + 1 < limit; a += 2) {
+					if (a >= 0xC0000 && a < 0x100000) continue;
+					guest[a >> 1] =
+						static_cast<uint16_t>(image[a] | (image[a + 1] << 8));
+				}
+				cout << "Loaded " << image.size() << " bytes of RAM from " << load_ram_path
+				     << " (UMA window writable)\n";
+			} catch (const std::exception& e) {
+				cerr << e.what() << "\n";
+				return 1;
+			}
+		}
 		full_step();
+		if (!load_ram_path.empty()) {
+			// The snapshot's BIOS keeps state in its shadow (UMA) window. Set
+			// after the first evaluation, which applies the reg's initializer.
+			tb.z486_mister_sim->system_i->z486_cpu__DOT__memory_inst__DOT__cache_unit_inst__DOT__dcache_inst__DOT__sim_uma_rom_writable = 1;
+		}
 		tb.reset = 0;
 		full_step();
 		configure_x86_management(ide0.present(), floppy0, floppy0.present());
@@ -1543,9 +1868,11 @@ int main(int argc, char** argv) {
 
 		if (tb.video_vs && !prev_vs) {
 			saw_video_sync = true;
-			const bool svga_frame = render_svga_frame(
+			const bool zsst_frame = render_zsst_frame(
 				presentbuffer, resolution_x, resolution_y);
-			if (!svga_frame) {
+			const bool svga_frame = !zsst_frame && render_svga_frame(
+				presentbuffer, resolution_x, resolution_y);
+			if (!zsst_frame && !svga_frame) {
 				if (frame_x_max >= 640) resolution_x = std::min(frame_x_max, H_RES);
 				if (frame_line_max >= 300) resolution_y = std::min(frame_line_max, V_RES);
 				std::copy(std::begin(screenbuffer), std::end(screenbuffer),
@@ -1558,7 +1885,9 @@ int main(int argc, char** argv) {
 			     << std::dec << " pix=" << frame_pix_cnt
 			     << " lines=" << frame_line_max
 			     << " xmax=" << frame_x_max;
-			if (svga_frame)
+			if (zsst_frame)
+				cout << " zsst=" << resolution_x << "x" << resolution_y;
+			else if (svga_frame)
 				cout << " fb=" << resolution_x << "x" << resolution_y;
 			cout << "\n";
 			if (!screenshot_dir.empty() && cycle >= next_screenshot_cycle) {
@@ -1586,6 +1915,26 @@ int main(int argc, char** argv) {
 				if (screen != last_console_text) {
 					cout << sim_time << ": VGA text update\n";
 					dump_nonempty_rows(screen);
+					if (g_zsst_write_trace) {
+						size_t line_start = 0;
+						while (line_start < screen.size()) {
+							size_t line_end = screen.find('\n', line_start);
+							if (line_end == std::string::npos) line_end = screen.size();
+							std::string line = screen.substr(line_start, line_end - line_start);
+							size_t first = line.find_first_not_of(' ');
+							size_t last = line.find_last_not_of(' ');
+							if (first != std::string::npos) {
+								line = line.substr(first, last - first + 1);
+								if (line.rfind("VOODOO_TEST", 0) == 0 &&
+								    traced_console_markers.insert(line).second) {
+									fprintf(g_zsst_write_trace, "# TEXT %s\n", line.c_str());
+									fflush(g_zsst_write_trace);
+								}
+							}
+							if (line_end == screen.size()) break;
+							line_start = line_end + 1;
+						}
+					}
 					last_console_text = screen;
 				}
 				if (!stop_on_text.empty() && screen.find(stop_on_text) != std::string::npos) {
@@ -1676,7 +2025,7 @@ int main(int argc, char** argv) {
 		{
 			std::ofstream out(tmp_dir / "harness.bin", ios::binary);
 			const uint32_t magic = 0x5A434B50; // ZCKP
-			const uint32_t version = 5;
+			const uint32_t version = 6;
 			write_pod(out, magic);
 			write_pod(out, version);
 			write_pod(out, sim_time);
@@ -1689,6 +2038,7 @@ int main(int argc, char** argv) {
 			write_pod(out, ddram_resp_data);
 			write_vector_u8(out, fb_mem);
 			write_pod(out, fb_palette);
+			write_vector_u8(out, zsst_mem);
 			write_scheduled_events(out, ps2_events);
 			write_pod(out, next_ps2_event);
 			write_scheduled_events(out, mouse_events);
@@ -1770,7 +2120,7 @@ int main(int argc, char** argv) {
 			uint32_t version = 0;
 			read_pod(in, magic);
 			read_pod(in, version);
-			if (magic != 0x5A434B50 || (version < 1 || version > 5)) {
+			if (magic != 0x5A434B50 || (version < 1 || version > 6)) {
 				throw std::runtime_error("bad simulator checkpoint");
 			}
 			read_pod(in, sim_time);
@@ -1790,6 +2140,10 @@ int main(int argc, char** argv) {
 				read_vector_u8(in, fb_mem);
 				read_pod(in, fb_palette);
 			}
+			if (version >= 6)
+				read_vector_u8(in, zsst_mem);
+			else
+				std::fill(zsst_mem.begin(), zsst_mem.end(), 0);
 			read_scheduled_events(in, ps2_events);
 			read_pod(in, next_ps2_event);
 			if (version >= 3) {
@@ -1985,6 +2339,7 @@ int main(int argc, char** argv) {
 	uint64_t next_gui_poll_cycle = loop_start_cycle;
 	uint64_t next_control_poll_cycle = loop_start_cycle;
 	size_t next_cpu_speed_event = 0;
+	size_t next_vga_plane_event = 0;
 	while (next_cpu_speed_event < cpu_speed_events.size() &&
 	       cpu_speed_events[next_cpu_speed_event].first < loop_start_cycle)
 		next_cpu_speed_event++;
@@ -2019,6 +2374,16 @@ int main(int argc, char** argv) {
 		step();
 		keyboard_observe_post(cycle);
 		consume_video(cycle);
+		while (next_vga_plane_event < vga_plane_events.size() &&
+		       vga_plane_events[next_vga_plane_event].first <= cycle) {
+			const fs::path& path = vga_plane_events[next_vga_plane_event].second;
+			if (!path.parent_path().empty()) fs::create_directories(path.parent_path());
+			if (dump_vga_planes(path))
+				cout << sim_time << ": VGA plane snapshot " << path << "\n";
+			else
+				cerr << sim_time << ": VGA plane snapshot failed: " << path << "\n";
+			next_vga_plane_event++;
+		}
 
 		if (!tb.clk_sys) {
 			keyboard_send_pre(cycle);
@@ -2250,12 +2615,22 @@ int main(int argc, char** argv) {
 		delete wav_writer;
 		wav_writer = nullptr;
 	}
+	if (g_zsst_write_trace) {
+		fclose(g_zsst_write_trace);
+		g_zsst_write_trace = nullptr;
+	}
 	if (!g_headless && mouse_captured) set_mouse_capture(false);
 	if (sdl_texture) SDL_DestroyTexture(sdl_texture);
 	if (sdl_renderer) SDL_DestroyRenderer(sdl_renderer);
 	if (sdl_window) SDL_DestroyWindow(sdl_window);
 	if (!g_headless) SDL_Quit();
 
+	if (!load_ram_path.empty()) {
+		// A loaded snapshot starts past POST; the caller checks its own result.
+		cout << "Snapshot run finished" << (saw_video_sync ? " with active video sync" : "") << "\n";
+		dump_nonempty_rows(current_text_screen());
+		return saw_first_instruction ? 0 : 2;
+	}
 	if (!saw_first_instruction || !saw_post || !saw_video_sync) {
 		cerr << "wrapper boot milestone not reached"
 		     << " first_instruction=" << saw_first_instruction

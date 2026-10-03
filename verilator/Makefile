@@ -1,9 +1,11 @@
 VERILATOR = verilator
+.DEFAULT_GOAL := all
 VERILATOR_BUILD_JOBS ?= 8
 SIM_OPT_LEVEL ?= -O2
 SIM_CLOCK_HZ ?= 20000000
 ENABLE_X87 ?= 1
 OBJ_DIR ?= obj_dir
+EXTRA_SOURCES ?=
 ifeq ($(shell uname -s),Darwin)
 SIM_ARCH_FLAGS ?= -mcpu=native
 else
@@ -20,9 +22,10 @@ VERILATOR_INCLUDE = -I../src -I../src/z486 -I../src/z486/x87
 D=../src
 DZ=../src/z486
 
-SOURCES = ../z486_mister_sim.sv \
+SOURCES = $(EXTRA_SOURCES) \
+		  ../z486_mister_sim.sv \
 		  $(D)/system.sv \
-		  $(DZ)/z486_pkg.sv $(DZ)/ucode_rom.sv $(DZ)/microsequencer.sv $(DZ)/hardwired_control.sv $(DZ)/z486.sv \
+		  $(DZ)/z486_pkg.sv $(DZ)/ucode_rom.sv $(DZ)/microsequencer.sv $(DZ)/event_control.sv $(DZ)/hardwired_control.sv $(DZ)/data_access.sv $(DZ)/z486.sv \
 		  $(DZ)/cpu_throttle.sv $(DZ)/interrupt_controller.sv \
 		  $(DZ)/data_unit.sv $(DZ)/address_unit.sv $(DZ)/shifter.sv $(DZ)/mul_div.sv $(DZ)/decoder.sv \
 		  $(DZ)/alu.sv $(DZ)/alu_alt.sv $(DZ)/prefetch.sv $(DZ)/segmentation_unit.sv \
@@ -37,7 +40,7 @@ SOURCES = ../z486_mister_sim.sv \
 		  $(DZ)/x87/x87_control.sv $(DZ)/x87/x87_unit.sv \
 		  $(DZ)/dsp_mul.sv $(DZ)/protection.sv \
 		  $(D)/iobus_adapter.sv $(D)/pic_inta_bridge.sv \
-		  $(D)/memory/main_memory.sv $(DZ)/memory.sv $(DZ)/l1_cache.sv $(DZ)/l1_icache.sv $(D)/memory/sdram_sim.v \
+		  $(D)/memory/main_memory.sv $(D)/memory/split_sdram_backend.sv $(DZ)/memory.sv $(DZ)/bus_unit.sv $(DZ)/cache_unit.sv $(DZ)/l1_cache.sv $(DZ)/l1_icache.sv $(D)/memory/sdram_sim.v \
 		  $(D)/soc/dma.v $(D)/soc/cdda.v $(D)/soc/floppy.v $(D)/soc/ide.v $(D)/soc/pic.v $(D)/soc/pit_counter.v $(D)/soc/joystick.v \
 		  $(D)/soc/pit.v $(D)/soc/ps2.v $(D)/soc/rtc.v $(D)/soc/vga.v $(D)/soc/svga_linebuf.sv \
 		  $(D)/common/dpram.v $(D)/common/simple_ram.v $(D)/common/simple_fifo.v $(D)/common/async_fifo.v \
@@ -57,6 +60,35 @@ SOURCES = ../z486_mister_sim.sv \
 		  $(D)/soc/sound/opl3/vibrato.sv $(D)/soc/sound/opl3/opl3.sv
 
 CPP_SOURCES = main.cpp ide_hps.cpp control_server.cpp
+
+ZSST ?= ../src/zsst
+VOODOO_SOURCES = \
+	$(ZSST)/sst1_pkg.sv \
+	$(ZSST)/generated/sst1_regs_pkg.sv \
+	$(ZSST)/generated/sst1_tmu_tables_pkg.sv \
+	$(ZSST)/frontend/sst1_addr_decode.sv \
+	$(ZSST)/frontend/sst1_float_to_fixed.sv \
+	$(ZSST)/frontend/sst1_pci_fifo.sv \
+	$(ZSST)/frontend/sst1_regfile.sv \
+	$(ZSST)/frontend/sst1_frontend.sv \
+	$(ZSST)/tmu/sst1_texture_layout.sv \
+	$(ZSST)/tmu/sst1_tmu_front_staged.sv \
+	$(ZSST)/tmu/sst1_texture_cache_ram.sv \
+	$(ZSST)/tmu/sst1_texture_cache.sv \
+	$(ZSST)/tmu/sst1_texture_address.sv \
+	$(ZSST)/tmu/sst1_texel_decode.sv \
+	$(ZSST)/tmu/sst1_texture_combine.sv \
+	$(ZSST)/tmu/sst1_tmu.sv \
+	$(ZSST)/fbi/sst1_pixel_pipeline.sv \
+	$(ZSST)/fbi/sst1_fb_write_combine.sv \
+	$(ZSST)/fbi/sst1_fb_read_cache.sv \
+	$(ZSST)/fbi/sst1_fbi.sv \
+	$(ZSST)/video/sst1_video_control.sv \
+	$(ZSST)/sst1_perf_counters.sv \
+	$(ZSST)/sst1_core.sv \
+	$(ZSST)/sst1_device.sv \
+	$(ZSST)/sim/models/sst1_ddr_model.sv \
+	../src/voodoo/zsst_pci_config.sv
 
 all: $(OBJ_DIR)/Vz486_mister_sim
 
@@ -84,8 +116,15 @@ no_x87:
 x87-50:
 	$(MAKE) OBJ_DIR=obj_dir_x87_50 SIM_CLOCK_HZ=50000000 ENABLE_X87=1 all
 
+# Complete x86 PC plus SST-1 programming/render path. The dedicated object
+# directory leaves the normal MiSTer simulator untouched.
+voodoo:
+	$(MAKE) OBJ_DIR=obj_dir_voodoo \
+		VERILATOR_X_FLAGS="$(VERILATOR_X_FLAGS) -DZ486_VOODOO=1" \
+		EXTRA_SOURCES="$(VOODOO_SOURCES)" all
+
 clean:
 	rm -rf $(OBJ_DIR) obj_dir_trace
 	rm -f ucode.hex pla_entry_rom.hex pla_group_entry.hex waveform.fst
 
-.PHONY: all run trace sim85 x87 no_x87 x87-50 clean
+.PHONY: all run trace sim85 x87 no_x87 x87-50 voodoo clean

@@ -24,7 +24,144 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-module vga
+// One 64 KiB VGA plane. USE_URAM is valid only when clk_sys and clk_vga are
+// the same clock; the KV260 system satisfies that contract. Keeping this
+// selection local to the VGA planes avoids changing the palette/DAC memories
+// or any other shared dual-clock RAM.
+module vga_plane_ram #(
+	parameter USE_URAM = 1'b0
+)(
+	input               clk_sys,
+	input               clk_vga,
+	input      [15:0]   host_address,
+	input       [7:0]   host_writedata,
+	input               host_write,
+	output      [7:0]   host_readdata,
+	input      [15:0]   video_address,
+	input               video_enable,
+	output      [7:0]   video_readdata
+);
+
+generate
+	if (USE_URAM) begin : uram
+`ifdef Z486_XILINX
+		// UltraRAM is physically 4096x72. Pack eight consecutive VGA bytes
+		// into each 64-bit word so a 64 KiB plane uses two URAMs rather than
+		// sixteen narrow, mostly-empty blocks. Delaying the byte selectors
+		// preserves the original one-clock read latency and enable behavior.
+		wire [63:0] host_word_q;
+		wire [63:0] video_word_q;
+		reg [2:0] host_byte;
+		reg [2:0] video_byte;
+		wire [7:0] host_we = host_write ? (8'b00000001 << host_address[2:0]) : 8'd0;
+
+		always @(posedge clk_sys) begin
+			if (!host_write) host_byte <= host_address[2:0];
+			if (video_enable) video_byte <= video_address[2:0];
+		end
+
+		assign host_readdata = host_word_q[host_byte*8 +: 8];
+		assign video_readdata = video_word_q[video_byte*8 +: 8];
+
+		xpm_memory_tdpram #(
+			.ADDR_WIDTH_A(13),
+			.ADDR_WIDTH_B(13),
+			.AUTO_SLEEP_TIME(0),
+			.BYTE_WRITE_WIDTH_A(8),
+			.BYTE_WRITE_WIDTH_B(8),
+			.CLOCKING_MODE("common_clock"),
+			.ECC_MODE("no_ecc"),
+			.MEMORY_INIT_FILE("none"),
+			.MEMORY_INIT_PARAM(""),
+			.MEMORY_OPTIMIZATION("true"),
+			.MEMORY_PRIMITIVE("ultra"),
+			.MEMORY_SIZE(64 * 8192),
+			.MESSAGE_CONTROL(0),
+			.READ_DATA_WIDTH_A(64),
+			.READ_DATA_WIDTH_B(64),
+			.READ_LATENCY_A(1),
+			.READ_LATENCY_B(1),
+			.READ_RESET_VALUE_A("0"),
+			.READ_RESET_VALUE_B("0"),
+			.RST_MODE_A("SYNC"),
+			.RST_MODE_B("SYNC"),
+			.SIM_ASSERT_CHK(0),
+			.USE_EMBEDDED_CONSTRAINT(0),
+			.USE_MEM_INIT(0),
+			.WAKEUP_TIME("disable_sleep"),
+			.WRITE_DATA_WIDTH_A(64),
+			.WRITE_DATA_WIDTH_B(64),
+			.WRITE_MODE_A("no_change"),
+			.WRITE_MODE_B("no_change")
+		) ram (
+			.clka(clk_sys),
+			.ena(1'b1),
+			.wea(host_we),
+			.addra(host_address[15:3]),
+			.dina({8{host_writedata}}),
+			.douta(host_word_q),
+			.regcea(1'b1),
+			.rsta(1'b0),
+			.clkb(clk_sys),
+			.enb(video_enable),
+			.web(8'd0),
+			.addrb(video_address[15:3]),
+			.dinb(64'd0),
+			.doutb(video_word_q),
+			.regceb(1'b1),
+			.rstb(1'b0),
+			.sleep(1'b0),
+			.injectsbiterra(1'b0),
+			.injectdbiterra(1'b0),
+			.injectsbiterrb(1'b0),
+			.injectdbiterrb(1'b0),
+			.sbiterra(),
+			.dbiterra(),
+			.sbiterrb(),
+			.dbiterrb()
+		);
+`else
+		// Simulation and non-Xilinx builds retain the behavioral dual-clock
+		// model; USE_URAM is enabled only by the KV260 synthesis wrapper.
+		dpram_difclk #(16,8) ram (
+			.clk_a(clk_sys),
+			.clk_b(clk_vga),
+			.address_a(host_address),
+			.data_a(host_writedata),
+			.wren_a(host_write),
+			.enable_a(1'b1),
+			.q_a(host_readdata),
+			.address_b(video_address),
+			.data_b(8'd0),
+			.wren_b(1'b0),
+			.enable_b(video_enable),
+			.q_b(video_readdata)
+		);
+`endif
+	end else begin : default_ram
+		dpram_difclk #(16,8) ram (
+			.clk_a(clk_sys),
+			.clk_b(clk_vga),
+			.address_a(host_address),
+			.data_a(host_writedata),
+			.wren_a(host_write),
+			.enable_a(1'b1),
+			.q_a(host_readdata),
+			.address_b(video_address),
+			.data_b(8'd0),
+			.wren_b(1'b0),
+			.enable_b(video_enable),
+			.q_b(video_readdata)
+		);
+	end
+endgenerate
+
+endmodule
+
+module vga #(
+	parameter USE_URAM = 1'b0,
+	parameter ONDEMAND_SCANOUT = 1'b0
+)
 (
 	input               clk_sys,
 	input               rst_n,
@@ -101,7 +238,18 @@ module vga
 	input               fb_native16,        // 1: 16/24bpp framebuffer rendered natively: fb_rgb bypasses the palette
 	input               fb_native24,        // 1: ... and it is the 24bpp mode (3 dots per pixel, 3x dot clock)
 	input      [23:0]   fb_rgb,
-	input               fb_pix_ce           // native 24bpp: a new pixel starts on this dot
+	input               fb_pix_ce,          // native 24bpp: a new pixel starts on this dot
+
+	// Optional KV260 line-at-a-time renderer. Native CRTC timing continues
+	// independently for guest-visible status, IRQ, and blink behavior.
+	input               scanline_req_valid,
+	output              scanline_req_ready,
+	input               scanline_frame_start,
+	input      [10:0]   scanline_y,
+	output     [10:0]   scanline_width,
+	output     [10:0]   scanline_height,
+	output reg [31:0]   scanline_native_frames,
+	output reg          scanline_done
 );
 
 //------------------------------------------------------------------------------ io
@@ -1106,6 +1254,44 @@ wire [3:0] host_write_plane_mask =
 	(~seq_access_odd_even_disabled) ? seq_map_write_enable & (4'b0101 << host_address_reduced[0]) :   // (A0=0) even: planes 0,2; (A0=1) odd: planes 1,3
 	                                  seq_map_write_enable;                                           // use map mask directly
 
+//------------------------------------------------------------------------------ optional on-demand scanline control
+
+reg scanline_busy;
+reg scanline_armed;
+reg scanline_seen_active;
+wire render_ce = ONDEMAND_SCANOUT ? scanline_busy : ce_video;
+wire scanline_request_accept = ONDEMAND_SCANOUT && scanline_req_valid &&
+	~scanline_busy;
+
+assign scanline_req_ready = ONDEMAND_SCANOUT && ~scanline_busy;
+
+always @(posedge clk_vga) begin
+	if(~vga_rst_n) begin
+		scanline_busy <= 1'b0;
+		scanline_armed <= 1'b0;
+		scanline_seen_active <= 1'b0;
+		scanline_done <= 1'b0;
+	end
+	else begin
+		scanline_done <= 1'b0;
+		if(scanline_request_accept) begin
+			scanline_busy <= 1'b1;
+			scanline_armed <= 1'b0;
+			scanline_seen_active <= 1'b0;
+		end
+		else if(ONDEMAND_SCANOUT && scanline_busy) begin
+			// Do not accept a stale active level left by the preceding row.
+			if(horiz_cnt == 0) scanline_armed <= 1'b1;
+			if(scanline_armed && vga_ce && vga_blank_n)
+				scanline_seen_active <= 1'b1;
+			if(scanline_seen_active && vga_ce && ~vga_blank_n) begin
+				scanline_busy <= 1'b0;
+				scanline_done <= 1'b1;
+			end
+		end
+	end
+end
+
 //------------------------------------------------------------------------------ memory address (graph)
 
 wire dot_memory_load_active;
@@ -1121,63 +1307,76 @@ reg memory_load_step_pre_first;
 reg memory_load_step_pre;
 reg memory_load_step_a;
 reg memory_load_step_b;
-always @(posedge clk_vga) if (ce_video) memory_load_step_pre_first <= dot_memory_load_first_in_frame || dot_memory_load_first_in_line_matched || dot_memory_load_first_in_line;
-always @(posedge clk_vga) if (ce_video) memory_load_step_pre       <= dot_memory_load;
-always @(posedge clk_vga) if (ce_video) memory_load_step_a         <= memory_load_step_pre;
-always @(posedge clk_vga) if (ce_video) memory_load_step_b         <= memory_load_step_a;
+always @(posedge clk_vga) if (render_ce) memory_load_step_pre_first <= dot_memory_load_first_in_frame || dot_memory_load_first_in_line_matched || dot_memory_load_first_in_line;
+always @(posedge clk_vga) if (render_ce) memory_load_step_pre       <= dot_memory_load;
+always @(posedge clk_vga) if (render_ce) memory_load_step_a         <= memory_load_step_pre;
+always @(posedge clk_vga) if (render_ce) memory_load_step_b         <= memory_load_step_a;
 
 reg [15:0] memory_start_line;
-always @(posedge clk_vga) if (ce_video) if(memory_load_step_pre_first) memory_start_line <= memory_address;
+always @(posedge clk_vga) if (render_ce) if(memory_load_step_pre_first) memory_start_line <= memory_address;
 
 reg [4:0] memory_row_scan_reg;
-always @(posedge clk_vga) if (ce_video) if(memory_load_step_pre_first) memory_row_scan_reg <= memory_row_scan;
+always @(posedge clk_vga) if (render_ce) if(memory_load_step_pre_first) memory_row_scan_reg <= memory_row_scan;
 
 reg memory_row_scan_double;
-always @(posedge clk_vga) if (ce_video) begin
-	if(crtc_vertical_doublescan && (dot_memory_load_first_in_frame || dot_memory_load_first_in_line_matched))  memory_row_scan_double <= 1'b1;
-	else if(crtc_vertical_doublescan && dot_memory_load_first_in_line && ~vz_rep)                              memory_row_scan_double <= ~memory_row_scan_double;
-	else if(~(crtc_vertical_doublescan) || dot_memory_load_vertical_retrace_start)                             memory_row_scan_double <= 1'b0;
+// The on-demand interface exposes logical rows, with VGA doublescan already
+// removed from scanline_height. Advance the framebuffer after every request
+// instead of applying the CRTC's physical two-scanline repeat a second time.
+wire scanline_skip_vertical_repeat = ONDEMAND_SCANOUT &&
+	(crtc_vertical_doublescan || crtc_row_max == 5'd1);
+// Only the CRTC doublescan bit repeats rows here. Maximum scan line 1 already
+// repeats each row through crtc_row_max; also toggling this flag would show
+// every row four times (the upper half of a mode 13h frame).
+wire memory_doublescan = ONDEMAND_SCANOUT ? 1'b0 : crtc_vertical_doublescan;
+always @(posedge clk_vga) if (render_ce) begin
+	if(memory_doublescan && (dot_memory_load_first_in_frame || dot_memory_load_first_in_line_matched)) memory_row_scan_double <= 1'b1;
+	else if(memory_doublescan && dot_memory_load_first_in_line && ~vz_rep) memory_row_scan_double <= ~memory_row_scan_double;
+	else if(~memory_doublescan || dot_memory_load_vertical_retrace_start) memory_row_scan_double <= 1'b0;
 end
 
 //do not change charmap in the middle of a character row scan
 reg [2:0] memory_char_map_a;
-always @(posedge clk_vga) if (ce_video) begin
+always @(posedge clk_vga) if (render_ce) begin
 	if(dot_memory_load_first_in_frame || dot_memory_load_first_in_line_matched || (dot_memory_load_first_in_line && memory_row_scan == 5'd0))  memory_char_map_a <= seq_char_map_a;
 end
 
 reg [2:0] memory_char_map_b;
-always @(posedge clk_vga) if (ce_video) begin
+always @(posedge clk_vga) if (render_ce) begin
 	if(dot_memory_load_first_in_frame || dot_memory_load_first_in_line_matched || (dot_memory_load_first_in_line && memory_row_scan == 5'd0))  memory_char_map_b <= seq_char_map_b;
 end
 
 // Latch Start Address and Byte Panning at Vertical Retrace Start
 reg [15:0] memory_address_start_reg;
-always @(posedge clk_vga) if (ce_video) begin
-	if(dot_memory_load_vertical_retrace_start)  memory_address_start_reg <= crtc_address_start[15:0] + { 14'd0, crtc_address_byte_panning };
+always @(posedge clk_vga) if (render_ce || scanline_request_accept) begin
+	if(scanline_request_accept && scanline_frame_start) memory_address_start_reg <= crtc_address_start[15:0] + { 14'd0, crtc_address_byte_panning };
+	else if(dot_memory_load_vertical_retrace_start) memory_address_start_reg <= crtc_address_start[15:0] + { 14'd0, crtc_address_byte_panning };
 end
 
 // Latch Horizontal Panning at Vertical Retrace End
 reg [3:0] memory_panning_reg;
-always @(posedge clk_vga) if (ce_video) begin
-	if(dot_memory_load_first_in_line_matched && attrib_panning_after_compare_match)  memory_panning_reg <= 4'd0;
-	else if(dot_memory_load_vertical_retrace_end)                                    memory_panning_reg <= attrib_panning_value;
+always @(posedge clk_vga) if (render_ce || scanline_request_accept) begin
+	if(scanline_request_accept && scanline_frame_start) memory_panning_reg <= attrib_panning_value;
+	else if(dot_memory_load_first_in_line_matched && attrib_panning_after_compare_match) memory_panning_reg <= 4'd0;
+	else if(dot_memory_load_vertical_retrace_end) memory_panning_reg <= attrib_panning_value;
 end
 
 reg [15:0] memory_address;
-always @(posedge clk_vga) if (ce_video) begin
+always @(posedge clk_vga) if (render_ce) begin
 	if(dot_memory_load_first_in_line_matched)  memory_address <= 16'd0;
 	else if(dot_memory_load_first_in_frame)    memory_address <= memory_address_start_reg;
-	else if(dot_memory_load_first_in_line)     memory_address <= (vz_rep || memory_row_scan_double || memory_row_scan_reg < crtc_row_max) ? memory_start_line :
+	else if(dot_memory_load_first_in_line)     memory_address <= (vz_rep || (!scanline_skip_vertical_repeat &&
+	                                                             (memory_row_scan_double || memory_row_scan_reg < crtc_row_max))) ? memory_start_line :
 	                                                                                                                              memory_start_line + { 6'd0, crtc_address_offset[8:0], 1'b0 };
 	else if(dot_memory_load)                   memory_address <= memory_address + 16'd1;
 end
 
 reg [4:0] memory_row_scan;
-always @(posedge clk_vga) if (ce_video) begin
+always @(posedge clk_vga) if (render_ce) begin
 	if(dot_memory_load_first_in_line_matched)  memory_row_scan <= 5'd0;
 	else if(dot_memory_load_first_in_frame)    memory_row_scan <= (crtc_row_preset <= crtc_row_max) ?     crtc_row_preset : 
 	                                                                                                      5'd0;
-	else if(dot_memory_load_first_in_line)     memory_row_scan <= (vz_rep || memory_row_scan_double) ?    memory_row_scan_reg : 
+	else if(dot_memory_load_first_in_line)     memory_row_scan <= (scanline_skip_vertical_repeat) ?       5'd0 :
+	                                                              (vz_rep || memory_row_scan_double) ?    memory_row_scan_reg :
 	                                                              (memory_row_scan_reg == crtc_row_max) ? 5'd0 : 
 	                                                                                                      memory_row_scan_reg + 5'd1;
 end
@@ -1198,7 +1397,7 @@ wire [15:0] memory_address_step_2 = {
 };
 
 reg [15:0] memory_address_reg_final;
-always @(posedge clk_vga) if (ce_video) if(memory_load_step_pre) memory_address_reg_final <= memory_address;
+always @(posedge clk_vga) if (render_ce) if(memory_load_step_pre) memory_address_reg_final <= memory_address;
 
 //------------------------------------------------------------------------------
 
@@ -1220,79 +1419,71 @@ wire [15:0] memory_txt_address = { memory_txt_font_sel[1:0], memory_txt_font_sel
 
 //------------------------------------------------------------------------------ plane ram (4 * 64kb)
 
-dpram_difclk #(16,8) plane_ram_0
+vga_plane_ram #(.USE_URAM(USE_URAM)) plane_ram_0
 (
-	.clk_a          (clk_sys),
-	.address_a      (host_address),
-	.data_a         (host_writedata[0]),
-	.wren_a         (general_enable_ram && host_write && host_write_plane_mask[0]),
-	.enable_a       (1'b1),
-	.q_a            (host_ram_q[0]),
-
-	.clk_b          (clk_vga),
-	.enable_b       (ce_video && dot_memory_load_active && ~seq_screen_disable),
-	.address_b      (memory_address_step_2),
-	.q_b            (plane_ram_q[0])
+	.clk_sys         (clk_sys),
+	.clk_vga         (clk_vga),
+	.host_address    (host_address),
+	.host_writedata  (host_writedata[0]),
+	.host_write      (general_enable_ram && host_write && host_write_plane_mask[0]),
+	.host_readdata   (host_ram_q[0]),
+	.video_enable    (render_ce && dot_memory_load_active && ~seq_screen_disable),
+	.video_address   (memory_address_step_2),
+	.video_readdata  (plane_ram_q[0])
 );
 
-dpram_difclk #(16,8) plane_ram_1
+vga_plane_ram #(.USE_URAM(USE_URAM)) plane_ram_1
 (
-	.clk_a          (clk_sys),
-	.address_a      (host_address),
-	.data_a         (host_writedata[1]),
-	.wren_a         (general_enable_ram && host_write && host_write_plane_mask[1]),
-	.enable_a       (1'b1),
-	.q_a            (host_ram_q[1]),
-
-	.clk_b          (clk_vga),
-	.enable_b       (ce_video && dot_memory_load_active && ~seq_screen_disable),
-	.address_b      (memory_address_step_2),
-	.q_b            (plane_ram_q[1])
+	.clk_sys         (clk_sys),
+	.clk_vga         (clk_vga),
+	.host_address    (host_address),
+	.host_writedata  (host_writedata[1]),
+	.host_write      (general_enable_ram && host_write && host_write_plane_mask[1]),
+	.host_readdata   (host_ram_q[1]),
+	.video_enable    (render_ce && dot_memory_load_active && ~seq_screen_disable),
+	.video_address   (memory_address_step_2),
+	.video_readdata  (plane_ram_q[1])
 );
 
-dpram_difclk #(16,8) plane_ram_2
+vga_plane_ram #(.USE_URAM(USE_URAM)) plane_ram_2
 (
-	.clk_a          (clk_sys),
-	.address_a      (host_address),
-	.data_a         (host_writedata[2]),
-	.wren_a         (general_enable_ram && host_write && host_write_plane_mask[2]),
-	.enable_a       (1'b1),
-	.q_a            (host_ram_q[2]),
-
-	.clk_b          (clk_vga),
-	.enable_b       (ce_video && dot_memory_load_active && ~seq_screen_disable),
-	.address_b      (memory_load_step_a ? memory_txt_address : memory_address_step_2),
-	.q_b            (plane_ram_q[2])
+	.clk_sys         (clk_sys),
+	.clk_vga         (clk_vga),
+	.host_address    (host_address),
+	.host_writedata  (host_writedata[2]),
+	.host_write      (general_enable_ram && host_write && host_write_plane_mask[2]),
+	.host_readdata   (host_ram_q[2]),
+	.video_enable    (render_ce && dot_memory_load_active && ~seq_screen_disable),
+	.video_address   (memory_load_step_a ? memory_txt_address : memory_address_step_2),
+	.video_readdata  (plane_ram_q[2])
 );
 
-dpram_difclk #(16,8) plane_ram_3
+vga_plane_ram #(.USE_URAM(USE_URAM)) plane_ram_3
 (
-	.clk_a          (clk_sys),
-	.address_a      (host_address),
-	.data_a         (host_writedata[3]),
-	.wren_a         (general_enable_ram && host_write && host_write_plane_mask[3]),
-	.enable_a       (1'b1),
-	.q_a            (host_ram_q[3]),
-
-	.clk_b          (clk_vga),
-	.enable_b       (ce_video && dot_memory_load_active && ~seq_screen_disable),
-	.address_b      (memory_address_step_2),
-	.q_b            (plane_ram_q[3])
+	.clk_sys         (clk_sys),
+	.clk_vga         (clk_vga),
+	.host_address    (host_address),
+	.host_writedata  (host_writedata[3]),
+	.host_write      (general_enable_ram && host_write && host_write_plane_mask[3]),
+	.host_readdata   (host_ram_q[3]),
+	.video_enable    (render_ce && dot_memory_load_active && ~seq_screen_disable),
+	.video_address   (memory_address_step_2),
+	.video_readdata  (plane_ram_q[3])
 );
 
 //------------------------------------------------------------------------------
 
 reg [7:0] plane_ram [3:0];
 
-always @(posedge clk_vga) if (ce_video) if(memory_load_step_a) plane_ram[0] <= plane_ram_q[0];
-always @(posedge clk_vga) if (ce_video) if(memory_load_step_a) plane_ram[1] <= plane_ram_q[1];
-always @(posedge clk_vga) if (ce_video) if(memory_load_step_a) plane_ram[2] <= plane_ram_q[2];
-always @(posedge clk_vga) if (ce_video) if(memory_load_step_a) plane_ram[3] <= plane_ram_q[3];
+always @(posedge clk_vga) if (render_ce) if(memory_load_step_a) plane_ram[0] <= plane_ram_q[0];
+always @(posedge clk_vga) if (render_ce) if(memory_load_step_a) plane_ram[1] <= plane_ram_q[1];
+always @(posedge clk_vga) if (render_ce) if(memory_load_step_a) plane_ram[2] <= plane_ram_q[2];
+always @(posedge clk_vga) if (render_ce) if(memory_load_step_a) plane_ram[3] <= plane_ram_q[3];
 
 //------------------------------------------------------------------------------
 
 reg [5:0] plane_shift_cnt;
-always @(posedge clk_vga) if (ce_video) begin
+always @(posedge clk_vga) if (render_ce) begin
 	if(memory_load_step_b)              plane_shift_cnt <= 6'd1;
 	else if(plane_shift_cnt == 6'd34)   plane_shift_cnt <= 6'd0;
 	else if(plane_shift_cnt != 6'd0)    plane_shift_cnt <= plane_shift_cnt + 6'd1;
@@ -1334,7 +1525,7 @@ assign plane_shift_value[0] =
 reg [7:0] plane_shift [3:0];
 
 integer shift_i;
-always @(posedge clk_vga) if (ce_video) begin
+always @(posedge clk_vga) if (render_ce) begin
 	for (shift_i = 0; shift_i < 4; shift_i = shift_i + 1) begin
 		if(memory_load_step_b)      plane_shift[shift_i] <= plane_shift_value[shift_i];
 		else if(plane_shift_enable) plane_shift[shift_i] <= { plane_shift[shift_i][6:0], 1'b0 };
@@ -1363,7 +1554,7 @@ wire [7:0] plane_txt_shift_value =
 	(txt_underline_enable || txt_cursor_enable) ? 8'hFF : 
 	                                              plane_ram_q[2];
 
-always @(posedge clk_vga) if (ce_video) begin
+always @(posedge clk_vga) if (render_ce) begin
 	if(memory_load_step_b) plane_txt_shift <= plane_txt_shift_value;
 	else if(plane_shift_enable) plane_txt_shift <= { plane_txt_shift[6:0], 1'b0 };
 end
@@ -1391,21 +1582,21 @@ wire txt_mono_reverse_video = (plane_ram[1][6:4] == 3'b111) && (plane_ram[1][2:0
 `ifdef AO486_VGA_TXT_ATTRIBUTE_BYTE_BIT_3
 reg [3:0] txt_foreground;
 // When character map select is active the attribute byte bit 3 controls only character map switching and not the foreground intensity.
-always @(posedge clk_vga) if (ce_video) if (memory_load_step_b) begin
+always @(posedge clk_vga) if (render_ce) if (memory_load_step_b) begin
 	if (attrib_mono_emulation) txt_foreground <= { plane_ram[1][3] && ~txt_mono_non_display, {3{ ~txt_mono_non_display && ~txt_mono_reverse_video }} };
 	else                       txt_foreground <= { ~char_map_select & plane_ram[1][3], plane_ram[1][2:0] }; // Hybrid cracktro does not show the Hybrid logo
 end
 `else
 reg [3:0] txt_foreground;
 // Allow the attribute byte bit 3 to simultaneously control both character map switching and the foreground intensity.
-always @(posedge clk_vga) if (ce_video) if (memory_load_step_b) begin
+always @(posedge clk_vga) if (render_ce) if (memory_load_step_b) begin
 	if (attrib_mono_emulation) txt_foreground <= { plane_ram[1][3] && ~txt_mono_non_display, {3{ ~txt_mono_non_display && ~txt_mono_reverse_video }} };
 	else                       txt_foreground <= plane_ram[1][3:0]; // Hybrid cracktro OK
 end
 `endif
 
 reg [3:0] txt_background;
-always @(posedge clk_vga) if (ce_video) if (memory_load_step_b) begin
+always @(posedge clk_vga) if (render_ce) if (memory_load_step_b) begin
 	if (attrib_mono_emulation) txt_background <= { ~attrib_blinking && plane_ram[1][7] && txt_mono_reverse_video, {3{ txt_mono_reverse_video }} };
 	else                       txt_background <= { ~attrib_blinking && plane_ram[1][7], plane_ram[1][6:4] };
 end
@@ -1419,13 +1610,13 @@ wire txt_line_graphic_char = (plane_ram[0][7:5] == 3'b110);
 wire [3:0] pel_input;
 
 reg [3:0] pel_input_last;
-always @(posedge clk_vga) if (ce_video) if(plane_shift_enable) pel_input_last <= pel_input;
+always @(posedge clk_vga) if (render_ce) if(plane_shift_enable) pel_input_last <= pel_input;
 
 reg pel_line_graphic_char;
-always @(posedge clk_vga) if (ce_video) if(plane_shift_enable) pel_line_graphic_char <= txt_line_graphic_char;
+always @(posedge clk_vga) if (render_ce) if(plane_shift_enable) pel_line_graphic_char <= txt_line_graphic_char;
 
 reg [3:0] pel_background;
-always @(posedge clk_vga) if (ce_video) if(plane_shift_enable) pel_background <= txt_background;
+always @(posedge clk_vga) if (render_ce) if(plane_shift_enable) pel_background <= txt_background;
 
 assign pel_input =
 	(plane_shift_9dot && ((attrib_9bit_same_as_8bit && pel_line_graphic_char) || txt_underline_enable))?   pel_input_last :
@@ -1446,21 +1637,30 @@ wire [3:0] pel_after_blink =
 	                                                                pel_after_enable;
 
 reg [39:0] pel_shift_reg;
-always @(posedge clk_vga) if (ce_video) if(plane_shift_enable) pel_shift_reg <= { 4'd0, pel_after_blink, pel_shift_reg[35:4] };
+always @(posedge clk_vga) if (render_ce) if(plane_shift_enable) pel_shift_reg <= { 4'd0, pel_after_blink, pel_shift_reg[35:4] };
 
 wire [7:0] pel_after_panning = pel_shift_reg[memory_panning_reg[3] ? 0 : 4*(memory_panning_reg+4'd1) +: 8];
 
 reg plane_shift_enable_last;
-always @(posedge clk_vga) if (ce_video) plane_shift_enable_last <= plane_shift_enable;
+always @(posedge clk_vga) begin
+	// A row request resumes a paused raster. Do not inherit the previous row's
+	// shift edge, because 256-color pixels are assembled from two nibbles.
+	if(scanline_request_accept) plane_shift_enable_last <= 1'b0;
+	else if(render_ce)          plane_shift_enable_last <= plane_shift_enable;
+end
 
 reg pel_color_8bit_cnt;
-always @(posedge clk_vga) if (ce_video) begin
-	if(plane_shift_enable && ~plane_shift_enable_last)  pel_color_8bit_cnt <= 1'b0;
-	else                                                pel_color_8bit_cnt <= ~pel_color_8bit_cnt;
+always @(posedge clk_vga) begin
+	// Re-establish the high/low-nibble phase at every on-demand row boundary.
+	if(scanline_request_accept)                         pel_color_8bit_cnt <= 1'b0;
+	else if(render_ce) begin
+		if(plane_shift_enable && ~plane_shift_enable_last) pel_color_8bit_cnt <= 1'b0;
+		else                                               pel_color_8bit_cnt <= ~pel_color_8bit_cnt;
+	end
 end
 
 reg [7:0] pel_color_8bit_buffer;
-always @(posedge clk_vga) if (ce_video) begin
+always @(posedge clk_vga) if (render_ce) begin
 	if(pel_color_8bit_cnt) pel_color_8bit_buffer <= pel_after_panning;
 end
 //------------------------------------------------------------------------------
@@ -1481,7 +1681,7 @@ dpram_difclk #(4,6) internal_palette_ram
 	.q_a            (host_palette_q),
 
 	.clk_b          (clk_vga),
-	.enable_b       (ce_video && attrib_pas && ~seq_screen_disable && ~vgareg_blank),
+	.enable_b       (render_ce && attrib_pas && ~seq_screen_disable && ~vgareg_blank),
 	.address_b      (pel_after_panning[3:0]),
 	.q_b            (pel_palette)
 );
@@ -1516,7 +1716,7 @@ wire [7:0] pel_dac_index =
 	(~attrib_pas)            ? 8'h00 : // 0 according to Intel documentation, attrib_color_overscan according to ET4000 documentation?
 	                           pel_color_index;
 
-assign vga_lf_ce         = ce_video;
+assign vga_lf_ce         = render_ce;
 assign vga_lf_nd         = vgaprep_not_displaying;
 
 //------------------------------------------------------------------------------ dac
@@ -1534,7 +1734,7 @@ dpram_difclk #(8,18) dac_ram
 	.q_a            (dac_read_q),
 
 	.clk_b          (clk_vga),
-	.enable_b       (ce_video && ~seq_screen_disable && ~vgareg_blank),
+	.enable_b       (render_ce && ~seq_screen_disable && ~vgareg_blank),
 	.address_b      (pel_dac_index & dac_mask),
 	.q_b            (dac_color)
 );
@@ -1560,7 +1760,22 @@ end
 
 //------------------------------------------------------------------------------ sequencer
 
-wire vertical_doublescan = crtc_vertical_doublescan || crtc_row_max == 1'd1;
+wire vertical_doublescan = crtc_vertical_doublescan || crtc_row_max == 5'd1;
+wire render_vertical_doublescan = ONDEMAND_SCANOUT ? 1'b0 : vertical_doublescan;
+
+// Logical dimensions of the low-resolution stream selected below. Text mode
+// retains its ninth character dot; VGA pixel/doublescan replication is
+// removed because HDMI performs the scaling.
+wire [12:0] scanline_base_width = seq_8dot_char ?
+	{1'b0, vga_width, 3'b000} :
+	({1'b0, vga_width, 3'b000} + {4'b0000, vga_width});
+wire [12:0] scanline_width_full = attrib_pelclock_div2 ?
+	{2'b00, vga_width, 2'b00} :
+	(scanline_base_width >> (seq_dotclock_divided ? 1 : 0));
+assign scanline_width = scanline_width_full > 13'd1024 ? 11'd1024 :
+	scanline_width_full[10:0];
+assign scanline_height = vertical_doublescan ? {1'b0, vga_height[10:1]} :
+	vga_height;
 
 // VGA
 localparam [2:0] VGA_H_TOTAL_EXTRA = 3'd4; // +5 = +4 zero-based
@@ -1620,7 +1835,12 @@ wire vert_first_cnt        = (vert_cnt  == 11'd0);
 wire vert_last_cnt         = (vert_cnt  == vert_total);
 
 reg dot_cnt_div;
-always @(posedge clk_vga) if (ce_video) dot_cnt_div <= ~(dot_cnt_div);
+always @(posedge clk_vga) begin
+	if(scanline_request_accept)
+		dot_cnt_div <= 1'b0;
+	else if(render_ce)
+		dot_cnt_div <= ~dot_cnt_div;
+end
 
 wire dot_cnt_enable = ~(seq_dotclock_divided) || dot_cnt_div;
 
@@ -1628,16 +1848,20 @@ wire dot_cnt_enable = ~(seq_dotclock_divided) || dot_cnt_div;
 wire character_last_dot = dot_cnt_enable && dot_cnt == { ~seq_8dot_char, {3{seq_8dot_char}} };
 
 // dot_cnt (the dot counter) is clocked by dot_cnt_enable
-always @(posedge clk_vga) if (ce_video) begin
-	if (dot_cnt_enable) begin
+always @(posedge clk_vga) begin
+	if(scanline_request_accept)
+		dot_cnt <= 4'd0;
+	else if(render_ce && dot_cnt_enable) begin
 		if (character_last_dot)   dot_cnt <= 4'd0;
 		else                      dot_cnt <= dot_cnt + 1'd1;
 	end
 end
 
 // horiz_cnt (the character counter) is clocked by character_last_dot
-always @(posedge clk_vga) if (ce_video) begin
-	if (character_last_dot) begin
+always @(posedge clk_vga) begin
+	if(scanline_request_accept)
+		horiz_cnt <= horiz_total - 1'b1;
+	else if(render_ce && character_last_dot) begin
 		if (horiz_last_cnt)       horiz_cnt <= 9'd0;
 		else                      horiz_cnt <= horiz_cnt + 1'd1;
 	end
@@ -1650,7 +1874,7 @@ end
 // lands before it, and a value at or below the current position would skip this
 // line's hsync (which also clocks the scanline counter) and drop the monitor's
 // lock. Latching at the end of the line gives the real-hardware result.
-always @(posedge clk_vga) if (ce_video) begin
+always @(posedge clk_vga) if (render_ce) begin
 	if (character_last_dot && horiz_last_cnt) begin
 		crtc_hrs_line    <= crtc_horizontal_retrace_start;
 		crtc_hrskew_line <= crtc_horizontal_retrace_skew;
@@ -1658,8 +1882,10 @@ always @(posedge clk_vga) if (ce_video) begin
 	end
 end
 // vert_cnt (the scanline counter) is clocked by HSYNC
-always @(posedge clk_vga) if (ce_video) begin
-	if (character_last_dot && hss) begin
+always @(posedge clk_vga) begin
+	if(scanline_request_accept)
+		vert_cnt <= scanline_y;
+	else if(render_ce && character_last_dot && hss) begin
 		if (vert_last_cnt) begin
 			vert_cnt <= 11'd0;
 			vz_rep   <= 1'b0;
@@ -1677,6 +1903,73 @@ always @(posedge clk_vga) if (ce_video) begin
 			vz_cnt   <= (vz_cnt == 3'd4 || ~vde) ? 3'd0 : vz_cnt + 1'd1;
 		end
 	end
+end
+
+// In on-demand mode this second, minimal CRTC runs at the programmed native
+// pixel cadence. It preserves guest-visible display/retrace timing while the
+// renderer above advances only for requested HDMI source rows.
+reg [3:0] native_dot_cnt;
+reg [8:0] native_horiz_cnt;
+reg [10:0] native_vert_cnt;
+reg native_dot_div;
+reg native_vsync;
+reg native_vblank;
+reg native_vsync_last;
+wire native_dot_enable = ~seq_dotclock_divided || native_dot_div;
+wire native_character_last = native_dot_enable &&
+	(native_dot_cnt == {~seq_8dot_char, {3{seq_8dot_char}}});
+wire native_horiz_last = native_horiz_cnt == horiz_total;
+wire native_vert_last = native_vert_cnt == vert_total;
+wire native_hss = native_horiz_cnt ==
+	(crtc_horizontal_retrace_start + crtc_horizontal_retrace_skew);
+wire native_vss = native_vert_cnt == crtc_vertical_retrace_start;
+wire native_vse = native_vert_cnt[3:0] == crtc_vertical_retrace_end;
+wire native_vbs = native_vert_cnt == crtc_vertical_blanking_start;
+wire native_vbe = native_vert_cnt[7:0] == crtc_vertical_blanking_end;
+wire native_not_displaying = native_horiz_cnt >=
+	crtc_horizontal_display_size || native_vert_cnt >
+	crtc_vertical_display_size || native_vblank;
+wire native_vblank_start = ce_video && native_character_last && native_hss &&
+	native_vbs;
+wire native_retrace_end = ce_video && native_vsync_last && ~native_vsync;
+
+always @(posedge clk_vga) begin
+	if(~vga_rst_n) begin
+		native_dot_cnt <= 4'd0;
+		native_horiz_cnt <= 9'd0;
+		native_vert_cnt <= 11'd0;
+		native_dot_div <= 1'b0;
+		native_vsync <= 1'b0;
+		native_vblank <= 1'b0;
+		native_vsync_last <= 1'b0;
+	end
+	else if(ce_video) begin
+		native_dot_div <= ~native_dot_div;
+		native_vsync_last <= native_vsync;
+		if(native_dot_enable) begin
+			if(native_character_last) native_dot_cnt <= 4'd0;
+			else native_dot_cnt <= native_dot_cnt + 1'b1;
+		end
+		if(native_character_last) begin
+			if(native_horiz_last) native_horiz_cnt <= 9'd0;
+			else native_horiz_cnt <= native_horiz_cnt + 1'b1;
+			if(native_hss) begin
+				if(native_vert_last) native_vert_cnt <= 11'd0;
+				else native_vert_cnt <= native_vert_cnt + 1'b1;
+				if(native_vss) native_vsync <= 1'b1;
+				else if(native_vse) native_vsync <= 1'b0;
+				if(native_vbs) native_vblank <= 1'b1;
+				else if(native_vbe || native_vert_last)
+					native_vblank <= 1'b0;
+			end
+		end
+	end
+end
+
+always @(posedge clk_vga) begin
+	if(~vga_rst_n) scanline_native_frames <= 32'd0;
+	else if(ONDEMAND_SCANOUT && native_retrace_end)
+		scanline_native_frames <= scanline_native_frames + 1'b1;
 end
 
 //------------------------------------------------------------------------------ dot memory load
@@ -1712,13 +2005,19 @@ assign dot_memory_load_first_in_line         = dot_memory_load_dot_cnt && horiz_
 assign dot_memory_load_first_in_frame        = dot_memory_load_first_in_line && vert_first_cnt;
 assign dot_memory_load_first_in_line_matched = dot_memory_load_first_in_line && (
 	// svga_et4000: when vertical line doubling is active use aligned line compare
-	vert_cnt == crtc_line_compare + (~vertical_doublescan || crtc_line_compare[0])
+	vert_cnt == (ONDEMAND_SCANOUT && vertical_doublescan ?
+		(crtc_line_compare >> 1) :
+		crtc_line_compare + (~vertical_doublescan || crtc_line_compare[0]))
 );
 
 //------------------------------------------------------------------------------ blink rate
 
 reg [5:0] blink_cnt;
-always @(posedge clk_vga) if (ce_video) if (dot_memory_load_vertical_retrace_end) blink_cnt <= blink_cnt + 6'd1;
+always @(posedge clk_vga) begin
+	if(ONDEMAND_SCANOUT ? native_retrace_end :
+		(render_ce && dot_memory_load_vertical_retrace_end))
+		blink_cnt <= blink_cnt + 6'd1;
+end
 
 assign blink_txt_value    = blink_cnt[5]; // = VSYNC rate divided by 32
 assign blink_cursor_value = blink_cnt[4]; // = VSYNC rate divided by 16
@@ -1745,7 +2044,7 @@ wire vgaprep_dot_timing = (seq_dotclock_divided ^ dot_cnt_enable) && dot_cnt == 
 
 // Horizontal Blanking (Excluding Blanking Wraparound)
 reg vgaprep_horiz_blank_no_wraparound;
-always @(posedge clk_vga) if (ce_video) begin
+always @(posedge clk_vga) if (render_ce) begin
 	if (vgaprep_dot_timing) begin
 		if      (hbs)                                                            vgaprep_horiz_blank_no_wraparound <= 1'b1;
 		else if ((hbe || horiz_last_cnt) && vgaprep_horiz_blank_no_wraparound)   vgaprep_horiz_blank_no_wraparound <= 1'b0;
@@ -1754,7 +2053,7 @@ end
 
 // Horizontal Blanking Wraparound (when hbe happens in the next line (blanking characters at the left side of the next line))
 reg vgaprep_horiz_blank_wraparound;
-always @(posedge clk_vga) if (ce_video) begin
+always @(posedge clk_vga) if (render_ce) begin
 	if (vgaprep_dot_timing) begin
 		if      (~hbe && vgaprep_horiz_blank_no_wraparound && horiz_last_cnt)    vgaprep_horiz_blank_wraparound <= 1'b1;
 		else if ( hbe && vgaprep_horiz_blank_wraparound)                         vgaprep_horiz_blank_wraparound <= 1'b0;
@@ -1762,7 +2061,7 @@ always @(posedge clk_vga) if (ce_video) begin
 end
 
 reg [8:0] horiz_overscan_left;
-always @(posedge clk_vga) if (ce_video) begin
+always @(posedge clk_vga) if (render_ce) begin
 	if (vgaprep_dot_timing) begin
 		if (hbe && vgaprep_horiz_blank_no_wraparound && horiz_cnt < horiz_total) horiz_overscan_left <= horiz_total - horiz_cnt;
 		else if   (vgaprep_horiz_blank_no_wraparound && horiz_last_cnt)          horiz_overscan_left <= 9'd0;
@@ -1771,7 +2070,7 @@ end
 
 // Vertical Blanking (Excluding Blanking Wraparound)
 reg vgaprep_vert_blank_no_wraparound;
-always @(posedge clk_vga) if (ce_video) begin
+always @(posedge clk_vga) if (render_ce) begin
 	if (vgaprep_dot_timing) if (hss) begin
 		if      (vbs)                                                            vgaprep_vert_blank_no_wraparound <= 1'b1;
 		else if ((vbe || vert_last_cnt) && vgaprep_vert_blank_no_wraparound)     vgaprep_vert_blank_no_wraparound <= 1'b0;
@@ -1780,7 +2079,7 @@ end
 
 // Vertical Blanking Wraparound (when vbe happens in the next frame (blanking lines at the top of the next frame))
 reg vgaprep_vert_blank_wraparound;
-always @(posedge clk_vga) if (ce_video) begin
+always @(posedge clk_vga) if (render_ce) begin
 	if (vgaprep_dot_timing) if (hss) begin
 		if      (~vbe && vgaprep_vert_blank_no_wraparound && vert_last_cnt)      vgaprep_vert_blank_wraparound <= 1'b1;
 		else if ( vbe && vgaprep_vert_blank_wraparound)                          vgaprep_vert_blank_wraparound <= 1'b0;
@@ -1788,7 +2087,7 @@ always @(posedge clk_vga) if (ce_video) begin
 end
 
 reg [10:0] vert_overscan_top;
-always @(posedge clk_vga) if (ce_video) begin
+always @(posedge clk_vga) if (render_ce) begin
 	if (vgaprep_dot_timing) begin
 		if (vbe && vgaprep_vert_blank_no_wraparound && vert_cnt < vert_total)    vert_overscan_top <= vert_total - vert_cnt;
 		else if   (vgaprep_vert_blank_no_wraparound && vert_last_cnt)            vert_overscan_top <= 11'd0;
@@ -1803,7 +2102,7 @@ wire vgaprep_blank = vgaprep_blank_no_wraparound || vgaprep_blank_wraparound;
 
 // Horizontal Sync
 reg vgaprep_horiz_sync;
-always @(posedge clk_vga) if (ce_video) begin
+always @(posedge clk_vga) if (render_ce) begin
 	if (vgaprep_dot_timing) begin
 		if      (hss)                          vgaprep_horiz_sync <= 1'b1;
 		else if (hse && vgaprep_horiz_sync)    vgaprep_horiz_sync <= 1'b0;
@@ -1813,7 +2112,7 @@ end
 
 // Vertical Sync
 reg vgaprep_vert_sync;
-always @(posedge clk_vga) if (ce_video) begin
+always @(posedge clk_vga) if (render_ce) begin
 	if (vgaprep_dot_timing) if (hss) begin
 		if      (vss)                          vgaprep_vert_sync <= 1'b1;
 		else if (vse && vgaprep_vert_sync)     vgaprep_vert_sync <= 1'b0;
@@ -1822,7 +2121,7 @@ always @(posedge clk_vga) if (ce_video) begin
 end
 
 // Display Enabled
-always @(posedge clk_vga) if (ce_video) begin
+always @(posedge clk_vga) if (render_ce) begin
 	if (vgaprep_dot_timing) begin
 		if ((horiz_last_cnt || hde) && vde)    vgaprep_not_displaying <= 1'b0;
 		else                                   vgaprep_not_displaying <= 1'b1;
@@ -1832,18 +2131,23 @@ end
 //------------------------------------------------------------------------------ Pulse: VBS, VSS, VSE
 
 // Input Status 1 Register - bit 0
-assign host_io_not_displaying   = vgaprep_not_displaying || vgaprep_blank; // 0=active_display, 1=(overscan||blank||sync)
+assign host_io_not_displaying = ONDEMAND_SCANOUT ? native_not_displaying :
+	(vgaprep_not_displaying || vgaprep_blank); // 0=active_display, 1=(overscan||blank||sync)
 // Input Status 1 Register - bit 3
-assign host_io_vertical_retrace = vgaprep_vert_sync;
+assign host_io_vertical_retrace = ONDEMAND_SCANOUT ? native_vsync :
+	vgaprep_vert_sync;
 
 reg vgaprep_vert_blank_last;
-always @(posedge clk_vga) if (ce_video) vgaprep_vert_blank_last <= vgaprep_vert_blank;
-reg host_io_vertical_retrace_last;
-always @(posedge clk_vga) if (ce_video) host_io_vertical_retrace_last <= host_io_vertical_retrace;
+always @(posedge clk_vga) if (render_ce) vgaprep_vert_blank_last <= vgaprep_vert_blank;
+reg render_vertical_retrace_last;
+always @(posedge clk_vga) if (render_ce) render_vertical_retrace_last <= vgaprep_vert_sync;
 
-assign dot_memory_load_vertical_blank_start   = vgaprep_vert_blank && ~(vgaprep_vert_blank_last);
-assign dot_memory_load_vertical_retrace_start = host_io_vertical_retrace && ~(host_io_vertical_retrace_last);
-assign dot_memory_load_vertical_retrace_end   = ~(host_io_vertical_retrace) && host_io_vertical_retrace_last;
+assign dot_memory_load_vertical_blank_start = ONDEMAND_SCANOUT ?
+	native_vblank_start : (vgaprep_vert_blank && ~vgaprep_vert_blank_last);
+assign dot_memory_load_vertical_retrace_start = vgaprep_vert_sync &&
+	~render_vertical_retrace_last;
+assign dot_memory_load_vertical_retrace_end = ~vgaprep_vert_sync &&
+	render_vertical_retrace_last;
 
 //------------------------------------------------------------------------------ vga output
 
@@ -1851,20 +2155,29 @@ assign dot_memory_load_vertical_retrace_end   = ~(host_io_vertical_retrace) && h
 // the 640-pixel line into the sync), so it is hidden whatever the Border option says.
 wire hide_overscan = ~vga_border || vga_tvmode;
 
-always @(posedge clk_vga) if (ce_video) vgareg_blank <= vgaprep_blank || vert_stretch; // blanking gates DAC
+always @(posedge clk_vga) begin
+	if(scanline_request_accept) vgareg_blank <= 1'b1;
+	else if(render_ce) vgareg_blank <= vgaprep_blank || vert_stretch; // blanking gates DAC
+end
 
 reg vgareg_blank_n;
-always @(posedge clk_vga) if (ce_video) vgareg_blank_n <= ~(vgaprep_blank_no_wraparound || vert_stretch || (hide_overscan && vgaprep_not_displaying)); // omit blanking wraparound to show top blanking as active display; the TV-mode padding rows are blank
+always @(posedge clk_vga) begin
+	if(scanline_request_accept) vgareg_blank_n <= 1'b0;
+	else if(render_ce) vgareg_blank_n <= ~(vgaprep_blank_no_wraparound || vert_stretch || (hide_overscan && vgaprep_not_displaying)); // omit blanking wraparound to show top blanking as active display; the TV-mode padding rows are blank
+end
 reg vga_blank_n_pre;
-always @(posedge clk_vga) if (ce_video) vga_blank_n_pre <= vgareg_blank_n;
+always @(posedge clk_vga) begin
+	if(scanline_request_accept) vga_blank_n_pre <= 1'b0;
+	else if(render_ce) vga_blank_n_pre <= vgareg_blank_n;
+end
 
 reg vgareg_horiz_sync;
-always @(posedge clk_vga) if (ce_video) vgareg_horiz_sync <= (vgaprep_horiz_sync && crtc_timing_enable)? ~(general_hsync) : general_hsync;
+always @(posedge clk_vga) if (render_ce) vgareg_horiz_sync <= (vgaprep_horiz_sync && crtc_timing_enable)? ~(general_hsync) : general_hsync;
 reg vgareg_vert_sync;
-always @(posedge clk_vga) if (ce_video) vgareg_vert_sync <= (vgaprep_vert_sync && crtc_timing_enable)? ~(general_vsync) : general_vsync;
+always @(posedge clk_vga) if (render_ce) vgareg_vert_sync <= (vgaprep_vert_sync && crtc_timing_enable)? ~(general_vsync) : general_vsync;
 
-always @(posedge clk_vga) if (ce_video) vga_horiz_sync <= vgareg_horiz_sync;
-always @(posedge clk_vga) if (ce_video) vga_vert_sync  <= vgareg_vert_sync;
+always @(posedge clk_vga) if (render_ce) vga_horiz_sync <= vgareg_horiz_sync;
+always @(posedge clk_vga) if (render_ce) vga_vert_sync  <= vgareg_vert_sync;
 
 
 // Real sync polarity as programmed by the BIOS (used by the analog output; the
@@ -1876,16 +2189,19 @@ assign vga_vsync_neg = general_vsync;
 // display window, sampled at the same stage as the DAC RAM address (same latency).
 reg [23:0] fb_rgb_q;
 reg        fb_bypass_q;
-always @(posedge clk_vga) if (ce_video) begin
+always @(posedge clk_vga) if (render_ce) begin
 	fb_rgb_q    <= fb_rgb;
 	fb_bypass_q <= fb_native16 && ~vgaprep_not_displaying;
 end
 
+wire [7:0] vga_r_nxt = (seq_screen_disable || vgareg_blank) ? 8'd0 : fb_bypass_q ? fb_rgb_q[23:16] : { dac_color[17:12], dac_color[17:16] };
+wire [7:0] vga_g_nxt = (seq_screen_disable || vgareg_blank) ? 8'd0 : fb_bypass_q ? fb_rgb_q[15:8]  : { dac_color[11:6],  dac_color[11:10] };
+wire [7:0] vga_b_nxt = (seq_screen_disable || vgareg_blank) ? 8'd0 : fb_bypass_q ? fb_rgb_q[7:0]   : { dac_color[5:0],   dac_color[5:4]   };
 reg [7:0] vga_r_pre, vga_g_pre, vga_b_pre;
-always @(posedge clk_vga) if (ce_video) begin
-	vga_r_pre <= (seq_screen_disable || vgareg_blank) ? 8'd0 : fb_bypass_q ? fb_rgb_q[23:16] : { dac_color[17:12], dac_color[17:16] };
-	vga_g_pre <= (seq_screen_disable || vgareg_blank) ? 8'd0 : fb_bypass_q ? fb_rgb_q[15:8]  : { dac_color[11:6],  dac_color[11:10] };
-	vga_b_pre <= (seq_screen_disable || vgareg_blank) ? 8'd0 : fb_bypass_q ? fb_rgb_q[7:0]   : { dac_color[5:0],   dac_color[5:4]   };
+always @(posedge clk_vga) if (render_ce) begin
+	vga_r_pre <= vga_r_nxt;
+	vga_g_pre <= vga_g_nxt;
+	vga_b_pre <= vga_b_nxt;
 end
 
 // A real VGA card has a pipeline between the CRTC and the DAC that the sync
@@ -1905,11 +2221,20 @@ end
 wire [7:0] vid_delay = fb_native24 ? 8'd45 : (seq_8dot_char ? 8'd16 : 8'd27) << seq_dotclock_divided;
 reg [24:0] vid_dly [0:255];
 reg  [7:0] vid_wr;
-always @(posedge clk_vga) if (ce_video) begin
-	vid_dly[vid_wr] <= {vga_r_pre, vga_g_pre, vga_b_pre, vga_blank_n_pre};
-	vid_wr <= vid_wr + 1'd1;
-	{vga_r, vga_g, vga_b, vga_blank_n} <= vid_dly[vid_wr - vid_delay];
-end
+// The optional line-at-a-time renderer (ONDEMAND_SCANOUT) has no monitor to align to: it
+// takes the pixels with upstream's latency, without the delay line.
+generate if (ONDEMAND_SCANOUT) begin : g_out_ondemand
+	always @(posedge clk_vga) begin
+		if (render_ce) {vga_r, vga_g, vga_b, vga_blank_n} <= {vga_r_nxt, vga_g_nxt, vga_b_nxt, vgareg_blank_n};
+		if (scanline_request_accept) vga_blank_n <= 1'b0;
+	end
+end else begin : g_out_delayed
+	always @(posedge clk_vga) if (render_ce) begin
+		vid_dly[vid_wr] <= {vga_r_pre, vga_g_pre, vga_b_pre, vga_blank_n_pre};
+		vid_wr <= vid_wr + 1'd1;
+		{vga_r, vga_g, vga_b, vga_blank_n} <= vid_dly[vid_wr - vid_delay];
+	end
+end endgenerate
 
 //------------------------------------------------------------------------------
 
@@ -1918,7 +2243,7 @@ always @(posedge clk_vga) begin
 	reg [1:0] cnt;
 	reg old_hs;
 
-	if(ce_video) begin
+	if(render_ce) begin
 		ce_div3 <= 0;
 		cnt <= cnt + 1'd1;
 		if(cnt >= 2) begin
@@ -1931,14 +2256,14 @@ always @(posedge clk_vga) begin
 end
 
 // Using the ce_video_reg register and dot_cnt_div instead of dot_cnt_enable fixes spikes in the vga_ce signal.
-reg ce_video_reg;
-always @(posedge clk_vga) ce_video_reg <= ce_video;
+reg render_ce_reg;
+always @(posedge clk_vga) render_ce_reg <= render_ce;
 
-assign vga_ce = ce_video_reg & (
+assign vga_ce = render_ce_reg & (
 	(fb_native16)         ? fb_pix_ce : // native 16bpp: one dot per pixel; 24bpp: one per three dots
 	(vga_flags[1:0] == 3) ? ce_div3 : 
 	                        ~vga_lores | (                                                                                     // when in vga_lores mode (not 4x mode)...
-	                                        ~(vertical_doublescan & vert_cnt[0]) &                                             // undo vertical doublescan when active (omits odd lines)
+	                                        ~(render_vertical_doublescan & vert_cnt[0]) &                                      // undo vertical doublescan when active (omits odd lines)
 	                                        (attrib_pelclock_div2 ? pel_color_8bit_cnt : ~seq_dotclock_divided | ~dot_cnt_div) // undo horizontal pixel doubling when active (omits doubled pixels)
 	                                     )
 );

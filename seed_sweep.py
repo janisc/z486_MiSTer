@@ -28,6 +28,10 @@ REVISION = "z486_mister"
 MAIN_CLOCK_MARKER = "emu|pll|pll_inst|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk"
 CLK_SYS_TOP_SETUP_RPT = f"{REVISION}.clk_sys_top_setup.rpt"
 CLK_SYS_TOP_SETUP_TCL = f"{REVISION}.clk_sys_top_setup.tcl"
+# Worst path to each of up to ENDPOINT_PATHS distinct endpoints, for
+# timing_families.py; the top-N full-path report is usually one family.
+CLK_SYS_ENDPOINTS_RPT = f"{REVISION}.clk_sys_endpoints.rpt"
+ENDPOINT_PATHS = 1000
 REQUIRED_BUILD_PROFILE = "production"
 
 
@@ -161,6 +165,13 @@ def write_clk_sys_top_setup_tcl(path: Path, npaths: int) -> None:
                     f"-file output_files/{CLK_SYS_TOP_SETUP_RPT} "
                     "-panel_name {clk_sys Top Setup Paths}"
                 ),
+                (
+                    "report_timing -setup "
+                    f"-from_clock $clk -to_clock $clk -npaths {ENDPOINT_PATHS} -nworst 1 "
+                    "-detail summary "
+                    f"-file output_files/{CLK_SYS_ENDPOINTS_RPT} "
+                    "-panel_name {clk_sys Endpoint Setup Paths}"
+                ),
                 "project_close",
                 "",
             ]
@@ -283,6 +294,7 @@ def copy_project_for_seed(project_dir: Path, dst: Path) -> None:
         "tests",
         "verilator",
         "verilator_system",
+        "zsst",          # zSST build tree (GBs); not part of the Quartus project
         "*.log",
     }
     copy_tree(project_dir, dst, ignored)
@@ -441,6 +453,18 @@ def parse_args() -> argparse.Namespace:
         help="deprecated; parallel work trees are stored under each seed output directory",
     )
     parser.add_argument("--keep-work", action="store_true", help="keep parallel worker project copies after the sweep")
+    parser.add_argument(
+        "--no-x87",
+        action="store_true",
+        help="build the snapshot with ENABLE_X87 = 0 (CPU timing/area work; not a shippable core)",
+    )
+    parser.add_argument(
+        "--profile",
+        default=REQUIRED_BUILD_PROFILE,
+        choices=("production", "debug", "base"),
+        help="build profile applied to the isolated source snapshot (the checked-in project stays "
+             "on production); use 'debug' (65 MHz) for single-seed routine measurements",
+    )
     return parser.parse_args()
 
 
@@ -464,7 +488,7 @@ def main() -> int:
     results: list[Result] = []
     seeds = list(range(args.start, args.end + 1))
     try:
-        if args.jobs <= 1:
+        if args.jobs <= 1 and args.profile == REQUIRED_BUILD_PROFILE and not args.no_x87:
             for seed in seeds:
                 print_event(f"=== seed {seed} ===", blank_before=True)
                 result = run_one_seed(
@@ -500,6 +524,20 @@ def main() -> int:
             snapshot_dir = out_dir / "src_snapshot" / project_dir.name
             copy_project_for_seed(project_dir, snapshot_dir)
             print_event(f"Source snapshot: {snapshot_dir}")
+            if args.profile != REQUIRED_BUILD_PROFILE:
+                rc = subprocess.run([sys.executable, str(snapshot_dir / "build_profile.py"), args.profile],
+                                    cwd=snapshot_dir).returncode
+                if rc != 0:
+                    raise SystemExit(f"build_profile.py {args.profile} failed in the snapshot")
+                print_event(f"Applied build profile {args.profile!r} to the snapshot")
+            if args.no_x87:
+                top = snapshot_dir / "z486_mister.sv"
+                text, n = re.subn(r"^localparam[ \t]+ENABLE_X87[ \t]*=[ \t]*1'b1;",
+                                  "localparam ENABLE_X87 = 1'b0;", top.read_text(), flags=re.MULTILINE)
+                if n != 1:
+                    raise SystemExit(f"--no-x87: expected one ENABLE_X87 localparam in {top}")
+                top.write_text(text)
+                print_event("Disabled the x87 in the snapshot (ENABLE_X87 = 0)")
             print_event(
                 f"Parallel sweep: jobs={args.jobs}, processors_per_job={processors_per_job}, "
                 f"work_root={out_dir}/seed_XX/work"
