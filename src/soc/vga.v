@@ -1210,10 +1210,14 @@ reg memory_row_scan_double;
 // instead of applying the CRTC's physical two-scanline repeat a second time.
 wire scanline_skip_vertical_repeat = ONDEMAND_SCANOUT &&
 	(crtc_vertical_doublescan || crtc_row_max == 5'd1);
+// Only the CRTC doublescan bit repeats rows here. Maximum scan line 1 already
+// repeats each row through crtc_row_max; also toggling this flag would show
+// every row four times (the upper half of a mode 13h frame).
+wire memory_doublescan = ONDEMAND_SCANOUT ? 1'b0 : crtc_vertical_doublescan;
 always @(posedge clk_vga) if (render_ce) begin
-	if(render_vertical_doublescan && (dot_memory_load_first_in_frame || dot_memory_load_first_in_line_matched)) memory_row_scan_double <= 1'b1;
-	else if(render_vertical_doublescan && dot_memory_load_first_in_line) memory_row_scan_double <= ~memory_row_scan_double;
-	else if(~render_vertical_doublescan || dot_memory_load_vertical_retrace_start) memory_row_scan_double <= 1'b0;
+	if(memory_doublescan && (dot_memory_load_first_in_frame || dot_memory_load_first_in_line_matched)) memory_row_scan_double <= 1'b1;
+	else if(memory_doublescan && dot_memory_load_first_in_line) memory_row_scan_double <= ~memory_row_scan_double;
+	else if(~memory_doublescan || dot_memory_load_vertical_retrace_start) memory_row_scan_double <= 1'b0;
 end
 
 //do not change charmap in the middle of a character row scan
