@@ -1,1 +1,1 @@
-61c768f8e4bc1e5cc0cf68d3a6097420939186f4 Gravis UltraSound, proof of concept: GF1 with its sample memory in the DDR3 (build 1, production profile, seed 6)
+61c768f8e4bc1e5cc0cf68d3a6097420939186f4 GUS proof of concept (build 2 = fitter seed 6 of the sweep of 2026-10-03; build 1 was the direct build)
