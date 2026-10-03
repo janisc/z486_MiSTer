@@ -176,6 +176,9 @@ module system (
 	output [15:0] sample_sb_r,
 	output [15:0] sample_opl_l,
 	output [15:0] sample_opl_r,
+	output [15:0] sample_gus_l,
+	output [15:0] sample_gus_r,
+	input         gus_enable,		// Gravis UltraSound present: 240h/340h, IRQ 7, DMA 7
 	input         sound_fm_mode,	// 0 = OPL2, 1 = OPL3
 	input         sound_cms_en,	    // Creative CM-S music enable
 
@@ -236,6 +239,7 @@ parameter ENABLE_CMS = 1'b1;
 parameter VGA_USE_URAM = 1'b0;
 parameter VGA_ONDEMAND_SCANOUT = 1'b0;
 parameter ENABLE_VOODOO = 1'b0;
+parameter ENABLE_GUS = 1'b0;      // Gravis UltraSound (sample memory in the DDR3)
 localparam [6:0] CPU_CLOCK_MHZ = SYS_FREQ / 1_000_000;
 
 assign cpu_pe      = debug_cpu_pe;
@@ -398,6 +402,21 @@ reg         joy_cs;
 reg         rtc_cs;
 reg         fm_cs;
 reg         sb_cs;
+
+// Gravis UltraSound
+wire        gus_on = ENABLE_GUS && gus_enable;
+reg         gus_cs;
+wire  [7:0] gus_readdata;
+wire        gus_wait;
+wire        gus_irq;
+wire        dma_gus_req, dma_gus_ack, dma_gus_tc;
+wire [15:0] dma_gus_readdata, dma_gus_writedata;
+wire        gus_active;
+wire [28:0] gus_ddram_addr;
+wire        gus_ddram_rd, gus_ddram_we;
+wire [63:0] gus_ddram_din;
+wire  [7:0] gus_ddram_be;
+
 reg         uart1_cs;
 reg         uart2_cs;
 reg         mpu_cs;
@@ -714,9 +733,9 @@ main_memory main_memory (
 	.fb_ddram_we          (fb_ddram_we),
 	.fb_ddram_rd          (fb_ddram_rd),
 	.fb_ddram_dout        (ddram_dout),
-	.fb_ddram_dout_ready  (ddram_dout_ready),
+	.fb_ddram_dout_ready  (ddram_dout_ready & ~gus_active),
 	.fb_ddram_burstcnt    (fb_ddram_burstcnt),
-	.fb_ddram_busy        (ddram_busy)
+	.fb_ddram_busy        (ddram_busy | gus_active)
 );
 
 // CPU → SDRAM port 0: main_memory holds signals stable until accepted
@@ -817,6 +836,7 @@ wire [7:0] iobus_readdata8 =
 	( pit_cs                                 ) ? pit_readdata      :
 	( ps2_io_cs|ps2_ctl_cs                   ) ? ps2_readdata      :
 	( rtc_cs                                 ) ? rtc_readdata      :
+	( gus_cs                                 ) ? gus_readdata      :
 	( sb_cs|fm_cs                            ) ? sound_readdata    :
 	( mpu_cs                                 ) ? mpu_readdata      :
 	( joy_cs                                 ) ? joystick_readdata :
@@ -846,6 +866,7 @@ iobus_adapter iobus_adapter (
     .io_write          (iobus_write),
     .io_writedata      (iobus_writedata_byte),
     .io_readdata       (iobus_readdata8),
+    .io_wait           (gus_wait),
     // IDE 32-bit
     .ide_address       (iobus_ide_address),
     .ide_read          (iobus_ide_read),
@@ -900,6 +921,7 @@ always @(posedge clk_sys) begin
 		rtc_cs        <= ({iobus_address_next[15:1], 1'd0} == 16'h0070);
 		fm_cs         <= ({iobus_address_next[15:2], 2'd0} == 16'h0388);
 		sb_cs         <= ({iobus_address_next[15:4], 4'd0} == 16'h0220);
+		gus_cs        <= gus_on && (({iobus_address_next[15:4], 4'd0} == 16'h0240) || ({iobus_address_next[15:4], 4'd0} == 16'h0340));
 		uart1_cs      <= ({iobus_address_next[15:3], 3'd0} == 16'h03F8); // COM1
 		uart2_cs      <= ({iobus_address_next[15:3], 3'd0} == 16'h02F8); // COM2
 		mpu_cs        <= ({iobus_address_next[15:1], 1'd0} == 16'h0330); // MPU-401 330/331
@@ -965,7 +987,13 @@ dma dma
 	.dma_5_req         (dma_sb_req_16),
 	.dma_5_ack         (dma_sb_ack_16),
 	.dma_5_readdata    (dma_sb_readdata_16),
-	.dma_5_writedata   (dma_sb_writedata)
+	.dma_5_writedata   (dma_sb_writedata),
+
+	.dma_7_req         (dma_gus_req),
+	.dma_7_ack         (dma_gus_ack),
+	.dma_7_tc          (dma_gus_tc),
+	.dma_7_readdata    (dma_gus_readdata),
+	.dma_7_writedata   (dma_gus_writedata)
 );
 
 floppy floppy
@@ -1042,12 +1070,102 @@ assign ioctl_wait           = 1'b0;
 
 // ddram is time-shared: boot loader reads the RAM image (pre-boot), then the SVGA
 // framebuffer owns it for writes (post-boot). boot_done is the arbiter (mutually exclusive).
-assign ddram_burstcnt       = boot_done ? fb_ddram_burstcnt : 8'd1;
-assign ddram_addr           = boot_done ? fb_ddram_addr     : {4'h3, boot_ddr_byte_addr[27:3]};
-assign ddram_rd             = boot_done ? fb_ddram_rd        : ddram_rd_r;
-assign ddram_din            = boot_done ? fb_ddram_din      : 64'd0;
-assign ddram_be             = boot_done ? fb_ddram_be       : 8'hFF;
-assign ddram_we             = boot_done ? fb_ddram_we       : 1'b0;
+// The DDR3 port has two masters after boot: main_memory's SVGA aperture path and the GUS sample
+// memory. The GUS takes the port for one beat at a time and only starts when main_memory has
+// nothing in flight; main_memory sees busy while the GUS is active and holds its request.
+reg         mm_rd_pending;   // main_memory read accepted, data not yet returned
+wire        mm_active = fb_ddram_we | fb_ddram_rd | mm_rd_pending;
+always @(posedge clk_sys) begin
+	if (reset) mm_rd_pending <= 0;
+	else if (fb_ddram_rd & ~gus_active & ~ddram_busy) mm_rd_pending <= 1;
+	else if (ddram_dout_ready & ~gus_active) mm_rd_pending <= 0;
+end
+
+assign ddram_burstcnt       = boot_done ? (gus_active ? 8'd1           : fb_ddram_burstcnt) : 8'd1;
+assign ddram_addr           = boot_done ? (gus_active ? gus_ddram_addr : fb_ddram_addr)     : {4'h3, boot_ddr_byte_addr[27:3]};
+assign ddram_rd             = boot_done ? (gus_active ? gus_ddram_rd   : fb_ddram_rd)       : ddram_rd_r;
+assign ddram_din            = boot_done ? (gus_active ? gus_ddram_din  : fb_ddram_din)      : 64'd0;
+assign ddram_be             = boot_done ? (gus_active ? gus_ddram_be   : fb_ddram_be)       : 8'hFF;
+assign ddram_we             = boot_done ? (gus_active ? gus_ddram_we   : fb_ddram_we)       : 1'b0;
+
+// Gravis UltraSound: xolod79's GF1 model (ao486 GUS branch). Its megabyte of sample memory lives
+// in the DDR3 behind the port above; the chip clock waits for the memory (see gus.sv, docs/GUS.md).
+generate if (ENABLE_GUS) begin : g_gus
+	wire        gus_mem_req, gus_mem_we, gus_mem_word, gus_mem_ack;
+	wire [19:0] gus_mem_addr;
+	wire [15:0] gus_mem_wdata, gus_mem_rdata;
+	wire [15:0] gus_audio_l, gus_audio_r;
+	assign sample_gus_l = gus_on ? gus_audio_l : 16'd0;
+	assign sample_gus_r = gus_on ? gus_audio_r : 16'd0;
+
+	gus #(.CLK_RATE(SYS_FREQ)) gus
+	(
+		.clk           (clk_sys),
+		.reset         (reset | ~gus_on),
+		.enable        (gus_on & boot_done),
+		.io_address8   (iobus_address[8]),
+		.io_address    (iobus_address[3:0]),
+		.writedata     (iobus_writedata_byte),
+		.readdata      (gus_readdata),
+		.gus_cs        (gus_cs),
+		.fm_cs         (fm_cs & gus_on),
+		.write         (iobus_write),
+		.read          (iobus_read),
+		.io_wait       (gus_wait),
+		.dma_req       (dma_gus_req),
+		.dma_ack       (dma_gus_ack),
+		.dma_tc        (dma_gus_tc),
+		.dma_readdata  (dma_gus_readdata),
+		.dma_writedata (dma_gus_writedata),
+		.irq           (gus_irq),
+		.audio_l       (gus_audio_l),
+		.audio_r       (gus_audio_r),
+		.mem_req       (gus_mem_req),
+		.mem_we        (gus_mem_we),
+		.mem_word      (gus_mem_word),
+		.mem_addr      (gus_mem_addr),
+		.mem_wdata     (gus_mem_wdata),
+		.mem_rdata     (gus_mem_rdata),
+		.mem_ack       (gus_mem_ack)
+	);
+
+	gus_ddr gus_ddr
+	(
+		.clk            (clk_sys),
+		.reset          (reset | ~boot_done | ~gus_on),
+		.mem_req        (gus_mem_req),
+		.mem_we         (gus_mem_we),
+		.mem_word       (gus_mem_word),
+		.mem_addr       (gus_mem_addr),
+		.mem_wdata      (gus_mem_wdata),
+		.mem_rdata      (gus_mem_rdata),
+		.mem_ack        (gus_mem_ack),
+		.start_ok       (~mm_active),
+		.active         (gus_active),
+		.ddr_addr       (gus_ddram_addr),
+		.ddr_rd         (gus_ddram_rd),
+		.ddr_we         (gus_ddram_we),
+		.ddr_din        (gus_ddram_din),
+		.ddr_be         (gus_ddram_be),
+		.ddr_busy       (ddram_busy),
+		.ddr_dout       (ddram_dout),
+		.ddr_dout_ready (ddram_dout_ready)
+	);
+end else begin : g_no_gus
+	assign gus_readdata      = 8'hFF;
+	assign gus_wait          = 1'b0;
+	assign gus_irq           = 1'b0;
+	assign dma_gus_req       = 1'b0;
+	assign dma_gus_writedata = 16'd0;
+	assign gus_active        = 1'b0;
+	assign gus_ddram_addr    = 29'd0;
+	assign gus_ddram_rd      = 1'b0;
+	assign gus_ddram_we      = 1'b0;
+	assign gus_ddram_din     = 64'd0;
+	assign gus_ddram_be      = 8'd0;
+	assign sample_gus_l      = 16'd0;
+	assign sample_gus_r      = 16'd0;
+end endgenerate
 
 assign dbg_mm_addr          = mm_addr;
 assign dbg_mm_din           = mm_din;
@@ -1366,7 +1484,7 @@ always @* begin
 	interrupt[4]  = irq_4;
 	interrupt[5]  = irq_5;
 	interrupt[6]  = irq_6;
-	interrupt[7]  = irq_7;
+	interrupt[7]  = irq_7 | gus_irq;
 	interrupt[8]  = irq_8;
 	interrupt[9]  = irq_9 | irq_2;
 	interrupt[10] = irq_10;

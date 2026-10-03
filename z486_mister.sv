@@ -134,6 +134,7 @@ localparam CONF_STR = {
 	"P1oBC,Stereo Mix,none,25%,50%,100%;",
 	"P1oO,SB Swap L/R,Off,On;",
 	"P1OP,MT32 Volume Ctl,MIDI,Line-In;",
+	"P1oJ,Gravis UltraSound,Off,On;",
 	"-;",
 	"P2,Hardware;",
 	"P2O89,CPU Speed,Full,56 MHz,30 MHz,15 MHz;",
@@ -246,6 +247,8 @@ wire [15:0] sample_sb_l;
 wire [15:0] sample_sb_r;
 wire [15:0] sample_opl_l;
 wire [15:0] sample_opl_r;
+wire [15:0] sample_gus_l;
+wire [15:0] sample_gus_r;
 wire        speaker_out;
 wire        speaker_out_audio;
 wire        sbp;
@@ -643,7 +646,8 @@ system #(
 	.ENABLE_X87(ENABLE_X87),
 	.ENABLE_CMS(ENABLE_CMS),
 	// DE10-Nano deliberately remains the PC-only build.
-	.ENABLE_VOODOO(1'b0)
+	.ENABLE_VOODOO(1'b0),
+	.ENABLE_GUS(1'b1)
 ) core (
 	.clk_sys             (clk_sys),
 	.reset               (reset_sync_r[2]),
@@ -820,6 +824,9 @@ system #(
 	.sample_sb_r         (sample_sb_r),
 	.sample_opl_l        (sample_opl_l),
 	.sample_opl_r        (sample_opl_r),
+	.sample_gus_l        (sample_gus_l),
+	.sample_gus_r        (sample_gus_r),
+	.gus_enable          (status[51]),   // OSD "Gravis UltraSound" (oJ)
 	.sound_fm_mode       (~status[57]),
 	.sound_cms_en        (1'b0),
 	.speaker_out         (speaker_out),
@@ -942,12 +949,14 @@ always @(posedge CLK_AUDIO) begin
 		           + {2'b00, sample_cms_l, sample_cms_l[8:4]}
 		           + {sb_l_swap[15], sb_l_swap}
 		           + {opl_l[15], opl_l}
+		           + {sample_gus_l[15], sample_gus_l}
 		           + (vol_en[2] ? {cd_l[15], cd_l} : 17'd0)
 		           + (mt32_mute ? 17'd0 : {mt32_l[15], mt32_l});
 		mix_tmp_r <= spk_out
 		           + {2'b00, sample_cms_r, sample_cms_r[8:4]}
 		           + {sb_r_swap[15], sb_r_swap}
 		           + {opl_r[15], opl_r}
+		           + {sample_gus_r[15], sample_gus_r}
 		           + (vol_en[1] ? {cd_r[15], cd_r} : 17'd0)
 		           + (mt32_mute ? 17'd0 : {mt32_r[15], mt32_r});
 	end
