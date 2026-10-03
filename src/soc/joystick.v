@@ -4,11 +4,12 @@
 // - Gravis GamePad Pro (Gravis Interface Protocol (GrIP))
 
 module joystick
+#(
+  parameter CLOCK_RATE = 85_000_000  // clk frequency in Hz
+)
 (
   input            rst_n,
   input            clk,
-
-  input  [27:0]    clock_rate,
 
   input [13:0]     dig_1, // joystick_0[13:0] & dig_mask[13:0]
   input [13:0]     dig_2, // status[47] ? 14'd0 : (joystick_1[13:0] & dig_mask[13:0])
@@ -29,29 +30,29 @@ wire ana_1_activity = $signed(ana_1[ 7:0]) < -ANALOG_ACTIVITY_THRESHOLD || ANALO
 wire ana_2_activity = $signed(ana_2[ 7:0]) < -ANALOG_ACTIVITY_THRESHOLD || ANALOG_ACTIVITY_THRESHOLD < $signed(ana_2[ 7:0]) ||
                       $signed(ana_2[15:8]) < -ANALOG_ACTIVITY_THRESHOLD || ANALOG_ACTIVITY_THRESHOLD < $signed(ana_2[15:8]);
 
-// 20 kHz clock for Gravis Interface Protocol (GrIP)
-reg clk_grav;
-reg [27:0] sum_grav = 28'd0;   // module scope: a block-local `reg=0` accumulator never
-                               // accumulates in Verilator (treated automatic) -> strobe dead in sim
+// Clock enables are 32-bit phase accumulators: a tick is the carry out, so
+// each costs one adder (frequency error below 1e-6 of the target).
+localparam [31:0] GRAV_INC  = ((64'd40000  << 32) + CLOCK_RATE / 2) / CLOCK_RATE;
+localparam [31:0] TIMED_INC = ((64'd909091 << 32) + CLOCK_RATE / 2) / CLOCK_RATE;
+
+// 20 kHz clock for Gravis Interface Protocol (GrIP): toggles at 40 kHz
+reg        clk_grav = 1'b0;
+reg        clk_grav_toggle = 1'b0;
+reg [31:0] phase_grav = 32'd0;
 always @(posedge clk) begin
-  sum_grav = sum_grav + 16'd40000;
-  if(sum_grav >= clock_rate) begin
-    sum_grav = sum_grav - clock_rate;
-    clk_grav = ~clk_grav;
-  end
+  {clk_grav_toggle, phase_grav} <= {1'b0, phase_grav} + {1'b0, GRAV_INC};
+  if (clk_grav_toggle) clk_grav <= ~clk_grav;
 end
 
-// 1.1 us tick used for the IBM joystick time formula
+// 1.1 us tick used for the IBM joystick time formula, restarted by a write
 // (see the relevant code below for more information)
-reg tick_1100ns;
-reg [27:0] sum_timed = 28'd0;   // module scope (see sum_grav)
+reg        tick_1100ns = 1'b0;
+reg [31:0] phase_timed = 32'd0;
 always @(posedge clk) begin
-  sum_timed = write ? 28'd0 : sum_timed + 20'd909091; // tick every 1.1 us
-  tick_1100ns = 1'b0;
-  if(sum_timed >= clock_rate) begin
-    sum_timed = sum_timed - clock_rate;
-    tick_1100ns = 1'b1;
-  end
+  if (write)
+    {tick_1100ns, phase_timed} <= 33'd0;
+  else
+    {tick_1100ns, phase_timed} <= {1'b0, phase_timed} + {1'b0, TIMED_INC};
 end
 
 reg [10:0] j1x, j1y, j2x, j2y; // axis measurement countdown value
@@ -110,8 +111,72 @@ reg       gravis_clk;
 reg [1:0] gravis_out;
 reg [4:0] gravis_pos;
 
-// Current joystick position value in the range [0,255]
-reg [7:0] j1x_pos, j1y_pos, j2x_pos, j2y_pos;
+// Measurement start: axes still to map, and the axis mapped next
+reg [2:0] map_left;
+reg [1:0] map_axis;
+
+// Current position of the axis being mapped, in the range [0,255]
+reg [7:0]  axis_pos;
+// Its countdown start value for the selected timing mode
+reg [10:0] axis_count;
+always @* begin
+  case (map_axis)
+    2'd0: axis_pos = ~use_dpad1  ? { ~ana_1[7],  ana_1[6:0] }  : // convert signed [-128,127] => unsigned [0,255]
+                      JOY1_LEFT  ? 8'd0   : // d-pad 1 left
+                      JOY1_RIGHT ? 8'd255 : // d-pad 1 right
+                                   8'd128;  // d-pad 1 center
+    2'd1: axis_pos = ~use_dpad1  ? { ~ana_1[15], ana_1[14:8] } :
+                      JOY1_UP    ? 8'd0   : // d-pad 1 up
+                      JOY1_DOWN  ? 8'd255 : // d-pad 1 down
+                                   8'd128;
+    2'd2: axis_pos = ~use_dpad2  ? { ~ana_2[7],  ana_2[6:0] }  :
+                      JOY2_LEFT  ? 8'd0   :
+                      JOY2_RIGHT ? 8'd255 :
+                                   8'd128;
+    default: axis_pos = ~use_dpad2 ? { ~ana_2[15], ana_2[14:8] } :
+                        JOY2_UP    ? 8'd0   :
+                        JOY2_DOWN  ? 8'd255 :
+                                     8'd128;
+  endcase
+
+  // Games often use either a timed method or count method to determine the joystick position.
+  //
+  // Timed
+  // -----
+  // Simulates the charging of a capacitor, as used to measure
+  // the resistance value (position) of the potentiometer inside the joystick
+  // Note: Uses the IBM joystick time formula (see below)
+  //
+  // Count
+  // -----
+  // The joystick position is determined by the number of reads required
+  // before the signal goes low (the number of reads are counted in software)
+  // Note: Smaller value ranges allow the joystick position to be determined
+  //       more quickly, but with maybe reduced resolution (good for platformers)
+  //       (for Jazz Jackrabbit the max count value seems to be 1000)
+  // Note: For flight simulators with analog joystick support the Count 256 mode
+  //       offers the full analog resolution currently provided
+  // Note: This mode might resolve joystick drift issues
+  // Note: Count 8+141 mode is compatible with the DOS game Paratrooper,
+  //       but can also be used for other games (e.g. platformers)
+  case (timed)
+    2'd0: // Timed
+      // IBM Joystick Time = 24.2 us + 0.011 (r) us = 0.011 * (2200 + r) us
+      // The typical potentiometer resistor value r seems to be around 100 kOhm
+      // Note: The 24.2 us accommodates a 2.2 kOhm resistor in series with the potentiometer
+      // Map joystick axis position range [0,255] to potentiometer resistance range [0,1000]
+      // Note: Potentiometer resistance is divided by 100, so the value 1000 represents a 100 kOhm pot
+      // Note: The timed countdown is clocked by tick_1100ns (1.1 us)
+      // Note: joy = 22 + (1000 * pos/255) = 22 + 1000/255 * pos
+      axis_count = 5'd22 + (axis_pos == 8'd255 ? 11'd1000 : (axis_pos << 2) - (axis_pos >> 4) - (axis_pos >> 6) - (axis_pos >> 8));
+    2'd1: // Count 8+141: DOS game Paratrooper compatible, map [0,255] -> 8 + [0,140]
+      axis_count = 4'd8 + (axis_pos >> 1) + (axis_pos >> 4) - (axis_pos >> 7) - (axis_pos >> 7);
+    2'd2: // Count 0+256: map [0,255] -> [0,255]
+      axis_count = axis_pos;
+    default: // Count 6+256: map [0,255] -> 6 + [0,255]
+      axis_count = 3'd6 + axis_pos;
+  endcase
+end
 
 always @(posedge clk) begin : joy_block
   if (!rst_n) begin
@@ -127,6 +192,9 @@ always @(posedge clk) begin : joy_block
     gravis_clk <= 1'b0;
     gravis_out <= 2'b00;
     gravis_pos <= 5'd0;
+
+    map_left <= 3'd0;
+    map_axis <= 2'd0;
   end else begin
     // Button assignment
     if (mode==2'd2) begin
@@ -204,100 +272,25 @@ always @(posedge clk) begin : joy_block
     if(ana_2_activity)  use_dpad2 <= 1'b0;
     else if(dig_2[3:0]) use_dpad2 <= 1'b1;
 
+    // A write starts a measurement. The four axes are mapped one per clock
+    // through one shared mapper; until then each countdown holds a nonzero
+    // placeholder, so every axis bit reads 1 from the cycle after the write.
     if (write) begin
-      // Get the current joystick position values in the range [0,255] at the start of a measurement.
-      
-      j1x_pos = ~use_dpad1  ? { ~ana_1[7],  ana_1[6:0] }  : // convert signed [-128,127] => unsigned [0,255]
-                 JOY1_LEFT  ? 8'd0   : // d-pad 1 left
-                 JOY1_RIGHT ? 8'd255 : // d-pad 1 right
-                              8'd128;  // d-pad 1 center
-
-      j1y_pos = ~use_dpad1  ? { ~ana_1[15], ana_1[14:8] } : // convert signed [-128,127] => unsigned [0,255]
-                 JOY1_UP    ? 8'd0   : // d-pad 1 up
-                 JOY1_DOWN  ? 8'd255 : // d-pad 1 down
-                              8'd128;  // d-pad 1 center
-
-      j2x_pos = ~use_dpad2  ? { ~ana_2[7],  ana_2[6:0] }  : // convert signed [-128,127] => unsigned [0,255]
-                 JOY2_LEFT  ? 8'd0   : // d-pad 2 left
-                 JOY2_RIGHT ? 8'd255 : // d-pad 2 right
-                              8'd128;  // d-pad 2 center
-
-      j2y_pos = ~use_dpad2  ? { ~ana_2[15], ana_2[14:8] } : // convert signed [-128,127] => unsigned [0,255]
-                 JOY2_UP    ? 8'd0   : // d-pad 2 up
-                 JOY2_DOWN  ? 8'd255 : // d-pad 2 down
-                              8'd128;  // d-pad 2 center
-
-      // Games often use either a timed method or count method to determine the joystick position.
-      // 
-      // Timed
-      // -----
-      // Simulates the charging of a capacitor, as used to measure
-      // the resistance value (position) of the potentiometer inside the joystick
-      // Note: Uses the IBM joystick time formula (see below)
-      // 
-      // Count
-      // -----
-      // The joystick position is determined by the number of reads required
-      // before the signal goes low (the number of reads are counted in software)
-      // Note: Smaller value ranges allow the joystick position to be determined
-      //       more quickly, but with maybe reduced resolution (good for platformers)
-      //       (for Jazz Jackrabbit the max count value seems to be 1000)
-      // Note: For flight simulators with analog joystick support the Count 256 mode
-      //       offers the full analog resolution currently provided
-      // Note: This mode might resolve joystick drift issues
-      // Note: Count 8+141 mode is compatible with the DOS game Paratrooper,
-      //       but can also be used for other games (e.g. platformers)
-      case(timed)
-        2'd0: begin // Timed
-          // IBM Joystick Time = 24.2 us + 0.011 (r) us = 0.011 * (2200 + r) us
-          // The typical potentiometer resistor value r seems to be around 100 kOhm
-          // Note: The 24.2 us accommodates a 2.2 kOhm resistor in series with the potentiometer
-          // 
-          // In timed mode this value simulates the time needed to charge a capacitor
-          // through the potentiometer of the joytick to determine the position
-          // 
-          // Map joystick axis position range [0,255] to potentiometer resistance range [0,1000]
-          // Note: Potentiometer resistance is divided by 100, so the value 1000 represents a 100 kOhm pot
-          // Note: The timed countdown is clocked by tick_1100ns (1.1 us)
-          // Note: joy = 22 + (1000 * pos/255) = 22 + 1000/255 * pos
-          j1x <= 5'd22 + (j1x_pos == 8'd255 ? 11'd1000 : (j1x_pos << 2) - (j1x_pos >> 4) - (j1x_pos >> 6) - (j1x_pos >> 8));
-          j1y <= 5'd22 + (j1y_pos == 8'd255 ? 11'd1000 : (j1y_pos << 2) - (j1y_pos >> 4) - (j1y_pos >> 6) - (j1y_pos >> 8));
-          j2x <= 5'd22 + (j2x_pos == 8'd255 ? 11'd1000 : (j2x_pos << 2) - (j2x_pos >> 4) - (j2x_pos >> 6) - (j2x_pos >> 8));
-          j2y <= 5'd22 + (j2y_pos == 8'd255 ? 11'd1000 : (j2y_pos << 2) - (j2y_pos >> 4) - (j2y_pos >> 6) - (j2y_pos >> 8));
-        end
-        2'd1: begin // Count 8+141
-          // DOS game Paratrooper compatible mappings:
-          // Map [0,255] ->  5 + [0,146]
-          // Map [0,255] ->  6 + [0,144]
-          // Map [0,255] ->  7 + [0,142]
-          // Map [0,255] ->  8 + [0,140]
-          // Map [0,255] ->  9 + [0,138]
-          // Map [0,255] -> 10 + [0,136]
-          // Map [0,255] -> 11 + [0,134]
-          // 
-          // Map [0,255] -> 8 + [0,140]
-          j1x <= 4'd8 + (j1x_pos >> 1) + (j1x_pos >> 4) - (j1x_pos >> 7) - (j1x_pos >> 7);
-          j1y <= 4'd8 + (j1y_pos >> 1) + (j1y_pos >> 4) - (j1y_pos >> 7) - (j1y_pos >> 7);
-          j2x <= 4'd8 + (j2x_pos >> 1) + (j2x_pos >> 4) - (j2x_pos >> 7) - (j2x_pos >> 7);
-          j2y <= 4'd8 + (j2y_pos >> 1) + (j2y_pos >> 4) - (j2y_pos >> 7) - (j2y_pos >> 7);
-        end
-        2'd2: begin // Count 0+256
-          // Map: [0,255] -> [0,255]
-          j1x <= j1x_pos;
-          j1y <= j1y_pos;
-          j2x <= j2x_pos;
-          j2y <= j2y_pos;
-        end
-        2'd3: begin // Count 6+256
-          // Map: [0,255] -> 6 + [0,255]
-          // TODO: Change this to something more useful for certain games?
-          j1x <= 3'd6 + j1x_pos;
-          j1y <= 3'd6 + j1y_pos;
-          j2x <= 3'd6 + j2x_pos;
-          j2y <= 3'd6 + j2y_pos;
-        end
-        default: ;
+      j1x <= 11'h7ff;
+      j1y <= 11'h7ff;
+      j2x <= 11'h7ff;
+      j2y <= 11'h7ff;
+      map_left <= 3'd4;
+      map_axis <= 2'd0;
+    end else if (map_left != 3'd0) begin
+      case (map_axis)
+        2'd0: j1x <= axis_count;
+        2'd1: j1y <= axis_count;
+        2'd2: j2x <= axis_count;
+        default: j2y <= axis_count;
       endcase
+      map_axis <= map_axis + 2'd1;
+      map_left <= map_left - 3'd1;
     end
 
     read_last <= read;

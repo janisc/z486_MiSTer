@@ -336,10 +336,10 @@ module i8237
 	input             read,
 	output reg  [7:0] readdata,
 
-	output     [15:0] dma_address,
-	output            dma_write,
-	output     [15:0] dma_writedata,
-	output            dma_read,
+	output reg [15:0] dma_address,
+	output reg        dma_write,
+	output reg [15:0] dma_writedata,
+	output reg        dma_read,
 	input      [15:0] dma_readdata,
 	input             dma_readdatavalid,
 	input             dma_waitrequest,
@@ -375,74 +375,150 @@ module i8237
 	output reg  [3:0] mask
 );
 
-wire  [7:0] ch_readdata[4];
-wire  [3:0] tc;
-wire  [3:0] auto;
-wire  [3:0] ack;
-
-wire [15:0] req_data[4];
-assign req_data[0] = ch0_writedata;
-assign req_data[1] = ch1_writedata;
-assign req_data[2] = ch2_writedata;
-assign req_data[3] = ch3_writedata;
-
-wire [15:0] ack_data[4];
-assign ch0_readdata = ack_data[0];
-assign ch1_readdata = ack_data[1];
-assign ch2_readdata = ack_data[2];
-assign ch3_readdata = ack_data[3];
-
-assign {ch3_ack, ch2_ack, ch1_ack, ch0_ack} = ack;
-always @(posedge clk) {ch3_tc, ch2_tc, ch1_tc, ch0_tc} <= tc;
-
-wire [15:0] dma_ch_address[4];
-wire  [3:0] dma_ch_write;
-wire [15:0] dma_ch_writedata[4];
-wire  [3:0] dma_ch_read;
-
-assign dma_read      = |dma_ch_read;
-assign dma_write     = |dma_ch_write;
-assign dma_address   = dma_ch_address[0] | dma_ch_address[1] | dma_ch_address[2] | dma_ch_address[3];
-assign dma_writedata = dma_ch_writedata[0] | dma_ch_writedata[1] | dma_ch_writedata[2] | dma_ch_writedata[3];
+// The system grants one channel at a time (ch_req is one-hot and only
+// asserted while no channel is busy), so the four channels share one
+// transfer engine and one address/count datapath. Each channel keeps its
+// programmed registers.
 
 reg flip_flop;
-
 wire reset = write && address == 4'hD;  // master clear
 
-generate
-	genvar i;
-	for( i = 0; i < 4; i = i + 1) begin : chan
-		i8237_chan #(i) dma_chan
-		(
-			.clk(clk),
-			.rst_n(rst_n),
-			.ch_reset(reset),
+// Per-channel registers
+reg [15:0] base_address    [4];
+reg [15:0] current_address [4];
+reg [15:0] base_counter    [4];
+reg [15:0] current_counter [4];
+reg  [3:0] dec;
+reg  [3:0] auto;
+reg  [1:0] transfer [4];
 
-			.address(address),
-			.writedata(writedata),
-			.readdata(ch_readdata[i]),
-			.write(write),
-			.flip_flop(flip_flop),
+// Transfer engine
+reg  [2:0] state;
+reg  [1:0] active;          // Granted channel.
+reg        ack_r;
+reg [15:0] ack_data;
 
-			.req(ch_req[i]),
-			.req_data(req_data[i]),
-			.ack(ack[i]),
-			.ack_data(ack_data[i]),
+wire [15:0] act_address = current_address[active];
+wire [15:0] act_counter = current_counter[active];
+wire [15:0] act_address_next = dec[active] ? act_address - 1'd1 : act_address + 1'd1;
+wire        update = state == 4;
+wire        act_tc = update && !act_counter;
+wire  [3:0] act_onehot = 4'b0001 << active;
+wire  [3:0] tc = act_tc ? act_onehot : 4'b0000;
+wire [15:0] req_data = (active == 2'd0) ? ch0_writedata :
+                       (active == 2'd1) ? ch1_writedata :
+                       (active == 2'd2) ? ch2_writedata : ch3_writedata;
 
-			.dma_address(dma_ch_address[i]),
-			.dma_write(dma_ch_write[i]),
-			.dma_writedata(dma_ch_writedata[i]),
-			.dma_read(dma_ch_read[i]),
-			.dma_readdata(dma_readdata),
-			.dma_readdatavalid(dma_readdatavalid),
-			.dma_waitrequest(dma_waitrequest),
+assign busy = (state != 3'd0) ? act_onehot : 4'b0000;
+assign {ch3_ack, ch2_ack, ch1_ack, ch0_ack} = ack_r ? act_onehot : 4'b0000;
+assign ch0_readdata = ack_data;
+assign ch1_readdata = ack_data;
+assign ch2_readdata = ack_data;
+assign ch3_readdata = ack_data;
+always @(posedge clk) {ch3_tc, ch2_tc, ch1_tc, ch0_tc} <= tc;
 
-			.busy(busy[i]),
-			.auto(auto[i]),
-			.tc(tc[i])
-		);
+always @(posedge clk) begin
+	if(~rst_n | reset)                                state <= 0;
+
+	else if(state == 0 && |ch_req) begin
+		state <= 1;
+		active <= ch_req[0] ? 2'd0 : ch_req[1] ? 2'd1 : ch_req[2] ? 2'd2 : 2'd3;
 	end
-endgenerate
+
+	else if(state == 1 && transfer[active] == 2)      state <= 2;
+	else if(state == 2 && ~dma_waitrequest)           state <= 3;
+	else if(state == 3 && dma_readdatavalid)          state <= 4;
+
+	else if(state == 4)                               state <= 5;
+	else if(state == 5)                               state <= 0;
+
+	else if(state == 1 && transfer[active] == 1)      state <= 6;
+	else if(state == 6 && ~dma_waitrequest)           state <= 4;
+
+	else if(state == 1)                               state <= 7;
+	else if(state == 7)                               state <= 4;
+end
+
+always @(posedge clk) begin
+	if(~rst_n)                               ack_r <= 0;
+	else if(state == 3 && dma_readdatavalid) ack_r <= 1;
+	else if(state == 6 && ~dma_waitrequest)  ack_r <= 1;
+	else if(state == 7)                      ack_r <= 1;
+	else                                     ack_r <= 0;
+end
+
+always @(posedge clk) begin
+	if(!state)                               dma_address <= 0;
+	else if(state == 1)                      dma_address <= act_address;
+end
+
+always @(posedge clk) begin
+	if(!state)                                    dma_read <= 0;
+	else if(state == 1 && transfer[active] == 2)  dma_read <= 1;
+	else if(state == 2 && ~dma_waitrequest)       dma_read <= 0;
+end
+
+always @(posedge clk) begin
+	if(!state)                                    dma_write <= 0;
+	else if(state == 1 && transfer[active] == 1)  dma_write <= 1;
+	else if(state == 6 && ~dma_waitrequest)       dma_write <= 0;
+end
+
+always @(posedge clk) begin
+	if(!state)                                    dma_writedata <= 0;
+	else if(state == 1 && transfer[active] == 1)  dma_writedata <= req_data;
+end
+
+always @(posedge clk) begin
+	if(state == 3 && dma_readdatavalid)      ack_data <= dma_readdata;
+end
+
+// Programmed registers: a CPU write to a channel takes priority over its
+// autoinitialize reload and the engine's update.
+integer c;
+always @(posedge clk) begin
+	for (c = 0; c < 4; c = c + 1) begin
+		if(~rst_n) begin
+			base_address[c] <= 0;
+			current_address[c] <= 0;
+			base_counter[c] <= 0;
+			current_counter[c] <= 0;
+			dec[c] <= 0;
+			auto[c] <= 0;
+			transfer[c] <= 0;
+		end else begin
+			if(write && address == c*2) begin
+				if (flip_flop) begin
+					base_address[c][15:8] <= writedata;
+					current_address[c][15:8] <= writedata;
+				end else begin
+					base_address[c][7:0] <= writedata;
+					current_address[c][7:0] <= writedata;
+				end
+			end
+			else if(tc[c] && auto[c])            current_address[c] <= base_address[c];
+			else if(update && active == c)       current_address[c] <= act_address_next;
+
+			if(write && address == c*2+1) begin
+				if (flip_flop) begin
+					base_counter[c][15:8] <= writedata;
+					current_counter[c][15:8] <= writedata;
+				end else begin
+					base_counter[c][7:0] <= writedata;
+					current_counter[c][7:0] <= writedata;
+				end
+			end
+			else if(tc[c] && auto[c])            current_counter[c] <= base_counter[c];
+			else if(update && active == c)       current_counter[c] <= act_counter - 1'd1;
+
+			if(write && address == 11 && writedata[1:0] == c) begin
+				dec[c] <= writedata[5];
+				auto[c] <= writedata[4];
+				transfer[c] <= writedata[3:2];
+			end
+		end
+	end
+end
 
 reg read_last;
 always @(posedge clk) begin
@@ -452,15 +528,16 @@ always @(posedge clk) begin
 end
 wire read_valid = read && ~read_last;
 
+wire [15:0] sel_address = current_address[address[2:1]];
+wire [15:0] sel_counter = current_counter[address[2:1]];
 always @(posedge clk) begin
 	if(read_valid) readdata <=
-							(~address[3])     ? (ch_readdata[0]|ch_readdata[1]|ch_readdata[2]|ch_readdata[3]) :
-							(address == 4'h8) ? {pending, terminated} :
-							(address == 4'hF) ? {4'hF, mask} :
-														8'd0; //temp reg
+							(~address[3] & ~address[0]) ? (flip_flop ? sel_address[15:8] : sel_address[7:0]) :
+							(~address[3])               ? (flip_flop ? sel_counter[15:8] : sel_counter[7:0]) :
+							(address == 4'h8)           ? {pending, terminated} :
+							(address == 4'hF)           ? {4'hF, mask} :
+														  8'd0; //temp reg
 end
-
-// (reset wire declared above, before generate block)
 
 always @(posedge clk) begin
 	if(~rst_n | reset)                            flip_flop <= 0;
@@ -501,176 +578,5 @@ always @(posedge clk) begin
 end
 
 assign req = pending & ~mask;
-
-endmodule
-
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-
-module i8237_chan #(parameter num) 
-(
-	input             clk,
-	input             rst_n,
-	input             ch_reset,
-
-	input       [3:0] address,
-	input       [7:0] writedata,
-	input             write,
-	output      [7:0] readdata,
-	input             flip_flop,
-
-	input             req,
-	input      [15:0] req_data,
-	output reg        ack,
-	output reg [15:0] ack_data,
-
-	output reg [15:0] dma_address,
-	output reg        dma_write,
-	output reg [15:0] dma_writedata,
-	output reg        dma_read,
-	input      [15:0] dma_readdata,
-	input             dma_readdatavalid,
-	input             dma_waitrequest,
-
-	output            busy,
-	output reg        auto,
-	output            tc
-);
-
-wire sel_addr = address == (num*2);
-wire sel_cnt  = address == ((num*2)+1);
-
-assign readdata = sel_addr ? (flip_flop ? current_address[15:8] : current_address[7:0]) : 
-				  sel_cnt  ? (flip_flop ? current_counter[15:8] : current_counter[7:0]) : 8'd0;
-
-reg [15:0] base_address;
-always @(posedge clk) begin
-	if(~rst_n)                base_address <= 0;
-	else if(write & sel_addr) begin
-		if (flip_flop) begin
-			base_address[15:8] <= writedata;
-		end else begin
-			base_address[7:0] <= writedata;
-		end
-	end
-end
-
-reg [15:0] current_address;
-always @(posedge clk) begin
-	if(~rst_n)                current_address <= 0;
-	else if(write & sel_addr) begin
-		if (flip_flop) begin
-			current_address[15:8] <= writedata;
-		end else begin
-			current_address[7:0] <= writedata;
-		end
-	end
-	else if(tc && auto)       current_address <= base_address;     
-	else if(update && ~dec)   current_address <= current_address + 1'd1;
-	else if(update &&  dec)   current_address <= current_address - 1'd1;
-end
-
-reg [15:0] base_counter;
-always @(posedge clk) begin
-	if(~rst_n)                base_counter <= 0;
-	else if(write & sel_cnt)  begin
-		if (flip_flop) begin
-			base_counter[15:8] <= writedata;
-		end else begin
-			base_counter[7:0] <= writedata;
-		end
-	end
-end
-
-reg [15:0] current_counter;
-always @(posedge clk) begin
-	if(~rst_n)                current_counter <= 0;
-	else if(write & sel_cnt)  begin
-		if (flip_flop) begin
-			current_counter[15:8] <= writedata;
-		end else begin
-			current_counter[7:0] <= writedata;
-		end
-	end
-	else if(tc && auto)       current_counter <= base_counter;
-	else if(update)           current_counter <= current_counter - 1'd1;    
-end
-
-wire sel_mode = address == 11 && writedata[1:0] == num;
-
-reg dec;
-always @(posedge clk) begin
-	if(~rst_n)                 dec <= 0;
-	else if(write && sel_mode) dec <= writedata[5];
-end
-
-always @(posedge clk) begin
-	if(~rst_n)                 auto <= 0;
-	else if(write && sel_mode) auto <= writedata[4];
-end
-
-reg [1:0] transfer;
-always @(posedge clk) begin
-	if(~rst_n)                 transfer <= 0;
-	else if(write && sel_mode) transfer <= writedata[3:2];
-end
-
-wire update = state == 4;
-assign tc   = update && !current_counter;
-assign busy = |state;
-
-reg [2:0] state;
-always @(posedge clk) begin
-	if(~rst_n | ch_reset)                    state <= 0;
-
-	else if(state == 0 && req)               state <= 1;
-
-	else if(state == 1 && transfer == 2)     state <= 2;
-	else if(state == 2 && ~dma_waitrequest)  state <= 3;
-	else if(state == 3 && dma_readdatavalid) state <= 4;
-
-	else if(state == 4)                      state <= 5;
-	else if(state == 5)                      state <= 0;
-
-	else if(state == 1 && transfer == 1)     state <= 6;
-	else if(state == 6 && ~dma_waitrequest)  state <= 4;
-
-	else if(state == 1)                      state <= 7;
-	else if(state == 7)                      state <= 4;
-end
-
-always @(posedge clk) begin
-	if(~rst_n)                               ack <= 0;
-	else if(state == 3 && dma_readdatavalid) ack <= 1;
-	else if(state == 6 && ~dma_waitrequest)  ack <= 1;
-	else if(state == 7)                      ack <= 1;
-	else                                     ack <= 0;
-end
-
-always @(posedge clk) begin
-	if(!state)                               dma_address <= 0;
-	else if(state == 1)                      dma_address <= current_address;
-end
-
-always @(posedge clk) begin
-	if(!state)                               dma_read <= 0;
-	else if(state == 1 && transfer == 2)     dma_read <= 1;
-	else if(state == 2 && ~dma_waitrequest)  dma_read <= 0;
-end
-
-always @(posedge clk) begin
-	if(!state)                               dma_write <= 0;
-	else if(state == 1 && transfer == 1)     dma_write <= 1;
-	else if(state == 6 && ~dma_waitrequest)  dma_write <= 0;
-end
-
-always @(posedge clk) begin
-	if(!state)                               dma_writedata <= 0;
-	else if(state == 1 && transfer == 1)     dma_writedata <= req_data;
-end
-
-always @(posedge clk) begin
-	if(state == 3 && dma_readdatavalid)      ack_data <= dma_readdata;
-end
 
 endmodule

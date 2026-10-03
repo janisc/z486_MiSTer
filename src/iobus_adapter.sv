@@ -27,6 +27,8 @@ module iobus_adapter (
 
     // Peripheral IO bus (directly drives all peripherals; muxed externally)
     output reg [15:0]  io_address,
+    output reg  [15:0] io_address_next,   // value io_address loads at the next edge
+    output reg         io_address_load,   // io_address loads io_address_next
     output reg         io_read,
     output reg         io_write,
     output reg  [7:0]  io_writedata,
@@ -90,6 +92,25 @@ wire [15:0] base_port = {cpu_addr, 2'b00};
 // byte FSM and read 0x170 then 0x171 (data low + error reg) -> garbage.
 wire ide_data_port = ((base_port == 16'h01F0) || (base_port == 16'h0170)) && cpu_be[0];
 
+// The next peripheral address, exposed so the system can register its device
+// selects on the same edge that loads io_address.
+always @(*) begin
+    io_address_load = 1'b0;
+    io_address_next = io_address;
+    case (state)
+        S_IDLE:   if (!was_active && (cpu_io_rd || cpu_io_wr)) begin
+                      io_address_load = 1'b1; io_address_next = base_port;
+                  end
+        S_ISSUE0: if (active_be[0]) begin io_address_load = 1'b1; io_address_next = byte_addr[15:0]; end
+        S_ISSUE1: if (active_be[1]) begin io_address_load = 1'b1; io_address_next = byte_addr[15:0] + 16'd1; end
+        S_ISSUE2: if (active_be[2]) begin io_address_load = 1'b1; io_address_next = byte_addr[15:0] + 16'd2; end
+        S_ISSUE3: if (active_be[3]) begin io_address_load = 1'b1; io_address_next = byte_addr[15:0] + 16'd3; end
+        default: ;
+    endcase
+end
+
+always @(posedge clk) if (io_address_load) io_address <= io_address_next;
+
 always @(posedge clk) begin
     if (!reset_n) begin
         state <= S_IDLE;
@@ -119,7 +140,6 @@ always @(posedge clk) begin
                     is_read <= cpu_io_rd;
                     write_data <= cpu_din;
                     read_accum <= 32'hFFFFFFFF;
-                    io_address <= base_port;
 
                     if (ide_data_port) begin
                         ide_address <= 4'd0;
@@ -142,7 +162,6 @@ always @(posedge clk) begin
             // ================================================================
             S_ISSUE0: begin
                 if (active_be[0]) begin
-                    io_address <= byte_addr[15:0];
                     if (is_read)
                         io_read <= 1'b1;
                     else begin
@@ -168,7 +187,6 @@ always @(posedge clk) begin
             // ================================================================
             S_ISSUE1: begin
                 if (active_be[1]) begin
-                    io_address <= byte_addr[15:0] + 16'd1;
                     if (is_read)
                         io_read <= 1'b1;
                     else begin
@@ -194,7 +212,6 @@ always @(posedge clk) begin
             // ================================================================
             S_ISSUE2: begin
                 if (active_be[2]) begin
-                    io_address <= byte_addr[15:0] + 16'd2;
                     if (is_read)
                         io_read <= 1'b1;
                     else begin
@@ -220,7 +237,6 @@ always @(posedge clk) begin
             // ================================================================
             S_ISSUE3: begin
                 if (active_be[3]) begin
-                    io_address <= byte_addr[15:0] + 16'd3;
                     if (is_read)
                         io_read <= 1'b1;
                     else begin

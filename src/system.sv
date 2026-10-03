@@ -362,6 +362,8 @@ wire        cpu_inta;
 
 // IO bus adapter outputs (peripheral-facing)
 wire [15:0] iobus_address;
+wire [15:0] iobus_address_next;    // address the adapter loads at the next edge
+wire        iobus_address_load;
 wire        iobus_write;
 wire        iobus_read;
 wire  [7:0] iobus_writedata_byte;
@@ -838,6 +840,8 @@ iobus_adapter iobus_adapter (
     .cpu_io_ready      (io_bus_ready),
     // Peripheral byte bus
     .io_address        (iobus_address),
+    .io_address_next   (iobus_address_next),
+    .io_address_load   (iobus_address_load),
     .io_read           (iobus_read),
     .io_write          (iobus_write),
     .io_writedata      (iobus_writedata_byte),
@@ -876,32 +880,35 @@ assign zsst_pci_bar0_base = 32'd0;
 assign zsst_pci_init_enable = 32'd0;
 `endif
 
-// Chip-selects must be combinational (iobus_adapter asserts io_write/io_read
-// for only 1 cycle, so registered CS would arrive 1 cycle late)
-always @(*) begin
-	ide0_cs       = ({iobus_address[15:3], 3'd0} == 16'h01F0) || ({iobus_address[15:0]} == 16'h03F6);
-	ide1_cs       = ({iobus_address[15:3], 3'd0} == 16'h0170) || ({iobus_address[15:0]} == 16'h0376);
-	joy_cs        = ({iobus_address[15:0]      } == 16'h0201);
-	floppy0_cs    = ({iobus_address[15:2], 2'd0} == 16'h03F0) || ({iobus_address[15:1], 1'd0} == 16'h03F4) || ({iobus_address[15:0]} == 16'h03F7) ;
-	dma_master_cs = ({iobus_address[15:5], 5'd0} == 16'h00C0);
-	dma_page_cs   = ({iobus_address[15:4], 4'd0} == 16'h0080);
-	dma_slave_cs  = ({iobus_address[15:4], 4'd0} == 16'h0000);
-	pic_master_cs = ({iobus_address[15:1], 1'd0} == 16'h0020);
-	pic_slave_cs  = ({iobus_address[15:1], 1'd0} == 16'h00A0);
-	pit_cs        = ({iobus_address[15:2], 2'd0} == 16'h0040) || (iobus_address == 16'h0061);
-	ps2_io_cs     = ({iobus_address[15:3], 3'd0} == 16'h0060);
-	ps2_ctl_cs    = ({iobus_address[15:4], 4'd0} == 16'h0090);
-	rtc_cs        = ({iobus_address[15:1], 1'd0} == 16'h0070);
-	fm_cs         = ({iobus_address[15:2], 2'd0} == 16'h0388);
-	sb_cs         = ({iobus_address[15:4], 4'd0} == 16'h0220);
-	uart1_cs      = ({iobus_address[15:3], 3'd0} == 16'h03F8); // COM1
-	uart2_cs      = ({iobus_address[15:3], 3'd0} == 16'h02F8); // COM2
-	mpu_cs        = ({iobus_address[15:1], 1'd0} == 16'h0330); // MPU-401 330/331
-	vga_b_cs      = ({iobus_address[15:4], 4'd0} == 16'h03B0);
-	vga_c_cs      = ({iobus_address[15:4], 4'd0} == 16'h03C0);
-	vga_d_cs      = ({iobus_address[15:4], 4'd0} == 16'h03D0);
-	debug_port_cs = ({iobus_address[15:0]      } == 16'h0402);
-	speedctl_cs   = ({iobus_address[15:1], 1'b0} == 16'h8888);
+// Device selects are registered with the I/O address: decoded from the
+// address the adapter loads next, on the edge that loads it, so they match
+// iobus_address in every cycle and peripheral paths start at a register.
+always @(posedge clk_sys) begin
+	if (iobus_address_load) begin
+		ide0_cs       <= ({iobus_address_next[15:3], 3'd0} == 16'h01F0) || ({iobus_address_next[15:0]} == 16'h03F6);
+		ide1_cs       <= ({iobus_address_next[15:3], 3'd0} == 16'h0170) || ({iobus_address_next[15:0]} == 16'h0376);
+		joy_cs        <= ({iobus_address_next[15:0]      } == 16'h0201);
+		floppy0_cs    <= ({iobus_address_next[15:2], 2'd0} == 16'h03F0) || ({iobus_address_next[15:1], 1'd0} == 16'h03F4) || ({iobus_address_next[15:0]} == 16'h03F7) ;
+		dma_master_cs <= ({iobus_address_next[15:5], 5'd0} == 16'h00C0);
+		dma_page_cs   <= ({iobus_address_next[15:4], 4'd0} == 16'h0080);
+		dma_slave_cs  <= ({iobus_address_next[15:4], 4'd0} == 16'h0000);
+		pic_master_cs <= ({iobus_address_next[15:1], 1'd0} == 16'h0020);
+		pic_slave_cs  <= ({iobus_address_next[15:1], 1'd0} == 16'h00A0);
+		pit_cs        <= ({iobus_address_next[15:2], 2'd0} == 16'h0040) || (iobus_address_next == 16'h0061);
+		ps2_io_cs     <= ({iobus_address_next[15:3], 3'd0} == 16'h0060);
+		ps2_ctl_cs    <= ({iobus_address_next[15:4], 4'd0} == 16'h0090);
+		rtc_cs        <= ({iobus_address_next[15:1], 1'd0} == 16'h0070);
+		fm_cs         <= ({iobus_address_next[15:2], 2'd0} == 16'h0388);
+		sb_cs         <= ({iobus_address_next[15:4], 4'd0} == 16'h0220);
+		uart1_cs      <= ({iobus_address_next[15:3], 3'd0} == 16'h03F8); // COM1
+		uart2_cs      <= ({iobus_address_next[15:3], 3'd0} == 16'h02F8); // COM2
+		mpu_cs        <= ({iobus_address_next[15:1], 1'd0} == 16'h0330); // MPU-401 330/331
+		vga_b_cs      <= ({iobus_address_next[15:4], 4'd0} == 16'h03B0);
+		vga_c_cs      <= ({iobus_address_next[15:4], 4'd0} == 16'h03C0);
+		vga_d_cs      <= ({iobus_address_next[15:4], 4'd0} == 16'h03D0);
+		debug_port_cs <= ({iobus_address_next[15:0]      } == 16'h0402);
+		speedctl_cs   <= ({iobus_address_next[15:1], 1'b0} == 16'h8888);
+	end
 end
 
 always @(posedge clk_sys) begin
@@ -998,11 +1005,10 @@ floppy floppy
 
 // PC gameport / joystick interface at I/O port 201h.
 // Derived from ao486 joystick module.
-joystick joystick
+joystick #(.CLOCK_RATE(SYS_FREQ)) joystick
 (
     .rst_n             (~rst[0]),
     .clk               (clk_sys),
-    .clock_rate        (clock_rate),
 
     .read              (iobus_read & joy_cs),
     .write             (iobus_write & joy_cs),
@@ -1133,12 +1139,10 @@ ide ide1
 );
 
 // timers
-pit pit
+pit #(.CLOCK_RATE(SYS_FREQ)) pit
 (
 	.clk               (clk_sys),
 	.rst_n             (~rst[6]),
-
-	.clock_rate        (clock_rate),
 
 	.io_address        ({iobus_address[5],iobus_address[1:0]}),
 	.io_writedata      (iobus_writedata_byte),

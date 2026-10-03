@@ -24,7 +24,11 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-module pit(
+module pit
+#(
+	parameter CLOCK_RATE = 85_000_000  // clk frequency in Hz
+)
+(
 	input               clk,
 	input               rst_n,
 
@@ -38,21 +42,15 @@ module pit(
 	input       [7:0]   io_writedata,
 
 	//speaker output
-	output              speaker_out,
-
-	input      [27:0]   clock_rate
+	output              speaker_out
 );
 
 //------------------------------------------------------------------------------ system clock
 
-// PIT counter clock input frequency: 105/88 MHz = 1193181.81818... Hz
-// Accurate accumulator-based NCO for PIT frequency (restored to match ao486_MiSTer;
-// An earlier core used a simplified blocking-assignment NCO with coarser dither).
-localparam INCREMENT = 32'd26250000; // = 11 * (2 * PIT_frequency)
-reg [31:0] clk_rate;                 // = 11 * (clock_rate)
-always @(posedge clk) begin
-    clk_rate <= ({4'b0, clock_rate} << 3) + ({4'b0, clock_rate} << 1) + {4'b0, clock_rate};
-end
+// PIT counter clock input frequency: 105/88 MHz = 1193181.81818... Hz.
+// A 32-bit phase accumulator toggles system_clock on each carry, at twice
+// that rate: evenly spaced edges, frequency error below 1e-9.
+localparam [31:0] INCREMENT = ((64'd26250000 << 32) + 11 * CLOCK_RATE / 2) / (11 * CLOCK_RATE);
 
 reg [31:0] sum;
 reg ce_system_counter;
@@ -61,13 +59,7 @@ always @(posedge clk) begin
         sum <= 32'd0;
         ce_system_counter <= 1'b0;
     end else begin
-        if ((sum + INCREMENT) >= clk_rate) begin
-            sum <= (sum + INCREMENT) - clk_rate;
-            ce_system_counter <= 1'b1;
-        end else begin
-            sum <= (sum + INCREMENT);
-            ce_system_counter <= 1'b0;
-        end
+        {ce_system_counter, sum} <= {1'b0, sum} + {1'b0, INCREMENT};
     end
 end
 
