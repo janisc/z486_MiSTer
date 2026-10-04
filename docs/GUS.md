@@ -151,14 +151,25 @@ Simulation (`tests/tb_gus.sv`, Icarus Verilog), against a memory model with rand
 - a 16-word DMA upload on a 16-bit channel completes with the terminal count interrupt and the
   right bytes;
 - the chip clock makes 19,757,985 transitions per second against a nominal 19,756,800 while the
-  memory is slow.
+  memory is slow;
+- accesses in quick succession (a tight read-back, a poke followed at once by a peek, a tight
+  upload) with fourteen voices playing and with the port taken away for 600 of every 2700 clocks,
+  and a 200-word DMA upload on that busy port: no error. Without the wait described under "One
+  trap" the first three fail.
 
 Hardware (DE10-Nano, the Future Crew demo disk with Gravis's software and `ULTRASND=240,7,7,7,7`):
 
 - a small test program reads the four 256 KB banks back distinct (1 MB), uploads 32 words over
   DMA channel 7 with every byte right, and receives the interrupt on IRQ 7;
 - Second Reality with its Gravis UltraSound option plays through, with sound;
-- Gravis's ULTRAMOD plays; PLAYMIDI and PLAYFILE behave as on the ao486 GUS core.
+- Gravis's ULTRAMOD plays; PLAYMIDI and PLAYFILE behave as on the ao486 GUS core;
+- the card together with an SVGA framebuffer mode: a stress program runs fourteen voices from
+  different places of the card's memory, sets VBE mode 101h and for twenty seconds reads picture
+  memory, card memory and voice registers back while the picture is shown. No mismatch (15 million
+  picture bytes, 2 to 6 million card bytes per run), and the picture is bit-identical with and
+  without the voices. A 4 KB DMA upload is correct with the SVGA mode on screen. This is the test
+  that found the trap: before the wait was added, about 1.6 % of the card memory reads were wrong
+  there.
 
 ## Known gaps
 
@@ -170,4 +181,5 @@ Hardware (DE10-Nano, the Future Crew demo disk with Gravis's software and `ULTRA
 - The voices read memory in every slot. With the single kept word, a busy tune costs on the
   order of a million single-beat DDR3 reads per second. A small direct-mapped cache in
   `gus_ddr.sv` would cut that several times.
-- Not tried together with the SVGA framebuffer modes, which use the same DDR3 port.
+- No game that uses an SVGA mode and the GUS at the same time has been tried; the stress program
+  stands in for one.
