@@ -155,8 +155,10 @@ the GUS there:
 
 Nothing in the GUS path depends on this fork's video work. The stock core has no line fetcher, so
 the long waits described above do not occur there: the card only ever waits for single beats of
-`main_memory`. The gate is part of `gus.sv` and comes along all the same; it is what makes the
-wrapper safe behind any memory, however slow.
+`main_memory`. Measured on a stock build with the first version of the wrapper: no wrong read
+with an SVGA mode on screen, but a poke followed at once by a peek failed there as well, about
+2 % of the time with voices playing. So the stock core needs the gate too. It is part of `gus.sv`
+and comes along with the file; it is what makes the wrapper safe behind any memory, however slow.
 
 ## Cost and timing (DE10-Nano, Quartus 17.1, 85 MHz)
 
