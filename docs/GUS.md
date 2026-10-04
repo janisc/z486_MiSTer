@@ -43,28 +43,51 @@ at most one CPU access, so there is room to repay a memory latency of some tens 
 slot. Longer stalls are carried over: up to 255 transitions (about 13 microseconds) are
 remembered.
 
-### One trap: accesses while the clock is held
+### What the held clock asks for: an access waits for the memory cycle
 
-While the chip clock is held, the model's phase signals stay as they are, and neighbouring phases
-of its ring overlap by design. One such pair is the phase that ends a CPU access to the sample
-memory and the phase of the voice's memory cycle, which follows it. Held there for as long as the
-memory takes, the model answers a new CPU access to the DRAM port (3x7) with the end condition of
-the previous one: a peek returns the previous byte and a poke is not written. With a DDR3 read of
-a dozen clocks no CPU is fast enough to get there. With the port taken for a few hundred clocks
-it happens once per video line: that is what the line fetcher of an SVGA framebuffer mode does
-in this fork. Voice register accesses are not affected (the model latches their register number
-and data before the overlap).
+The first version of the wrapper (the build of 2026-10-03) only held the clock. That was not
+enough, and the reason is worth knowing before changing anything here.
 
-So the wrapper passes an I/O strobe on to the model only while the model is outside its memory
-cycles (`dram_access` low) and holds the bus with `io_wait` until then. The access then starts
-in the phase after the memory cycle, which is where the real chip would see it.
+The model's phase ring is level driven, like the latches of the chip it was drawn from, and
+neighbouring phases overlap: each phase signal stays on during the first half of the next one. In
+a running chip an overlap lasts 50 ns. With the clock held it lasts as long as the hold.
+
+One overlap matters. `clk_sel[9]` ends a CPU access to the sample memory (it sets
+`dram_pp_state`, which releases the bus), and it is still on during the first level of
+`clk_sel[10]`, the voice's memory cycle, which is where the wrapper holds the clock in every
+voice slot. The request flag of the CPU access, `dram_io_pp`, is only cleared four phases later.
+So for the length of the voice's memory cycle the model is in the state "a CPU access is being
+completed". A new access to the DRAM port (3x7) that arrives in that time is completed on the
+spot, by the condition that belonged to the previous one: a peek returns the previous byte, and a
+poke is not written at all.
+
+How long the window is open depends on the memory. A DDR3 read takes about a dozen clocks, and
+no CPU gets from one DRAM access to the next that fast, since the address register has to be
+written in between. Only a poke followed immediately by a peek fits, with voices playing. But in
+this fork the line fetcher of the SVGA framebuffer modes takes the port for a few hundred clocks
+once per video line, and then "write the address, read the byte" fits too. Measured on the first
+version, with VBE mode 101h on screen: about 1.6 % of the reads of the card's memory returned the
+byte of the previous address, one per video line. In text and VGA modes, where the fetcher rests,
+nothing was wrong, which is why Second Reality and the module players sounded right.
+
+Voice register accesses are not affected: the model latches their register number at
+`clk_sel[4]` and their data before `clk_sel[9]`, and a write that arrives in the overlap is put
+off to the next round, not dropped. DMA transfers are not affected either; the model already ends
+those on an edge.
+
+The cure is in the wrapper, and `gf1.v` stays as it is: an I/O strobe is passed on to the model
+only while the model is outside its memory cycles (`dram_access` low). An access that arrives
+during one is kept (`read_due`, `write_due`) and the bus is held with `io_wait`; the strobe
+follows when the cycle is over, in the phase after it, where a real chip would see it too. The
+common case costs nothing: a strobe that arrives outside a memory cycle goes through in the same
+clock as before.
 
 ## The pieces
 
 | File | Role |
 |---|---|
 | `src/soc/sound/gus/gf1.v` | xolod79's GF1 model, unchanged |
-| `src/soc/sound/gus/gus.sv` | Wrapper: register glue as in ao486's `gus.v`, the chip clock generator with hold and repay, and the memory port |
+| `src/soc/sound/gus/gus.sv` | Wrapper: register glue as in ao486's `gus.v`, the chip clock generator with hold and repay, the gate that keeps I/O strobes out of the chip's memory cycles, and the memory port |
 | `src/soc/sound/gus/gus_ddr.sv` | The megabyte in the HPS DDR3: single 64-bit beats, the last word read is kept |
 | `src/soc/sound/gus/gus_spram.v` | The small block RAM the model instantiates for its voice state (`spram`), in Verilog |
 | `tests/tb_gus.sv`, `tests/gus_sim_prep.py` | Testbench, and a script that makes a simulation copy of `gf1.v` with all registers starting at zero |
@@ -91,18 +114,22 @@ makes no requests at all.
 framebuffer at 3F80_0000h. Requests are registered when a transfer starts, so the model's
 address logic is not on the port's paths. Reads and writes are held until the port accepts them
 (Avalon-MM waitrequest). The word last read is kept and written through, so repeated reads
-within the same eight bytes, which is what idle voices do, cost no bus cycle.
+within the same eight bytes, which is what idle voices do, cost no bus cycle. A read that does go
+to the bus takes about a dozen clocks when the port is free.
 
 In this fork the DDR3 port already had two masters, the CPU's SVGA aperture path in
 `main_memory` and the line fetcher of the native video output. The GUS is the third. The
 fetcher wins while it owns the port, then the GUS for one beat, then `main_memory`; the GUS only
-starts when nothing is in flight, and `main_memory` sees busy while the GUS is active.
+starts when nothing is in flight, and `main_memory` sees busy while the GUS is active. A GUS
+request that meets a line fetch waits for all of it, a few hundred clocks; the chip clock stands
+still that long and is repaid afterwards.
 
 ### What else changed
 
 - `src/iobus_adapter.sv`: an `io_wait` input. The GF1 stretches some I/O cycles (it serves a
-  peek or a voice register read at the right phase of its clock), and the adapter had no way to
-  wait. The byte's wait state is now held while `io_wait` is high. Tied to zero without the GUS.
+  peek or a voice register read at the right phase of its clock), the wrapper holds an access
+  that arrives during a memory cycle, and the adapter had no way to wait. The byte's wait state
+  is now held while `io_wait` is high. Tied to zero without the GUS.
 - `src/system.sv`: registered select for 240h-24Fh and 340h-34Fh, the read data mux, DMA
   channel 7 (the controller had the channel, unconnected), `interrupt[7]`, the DDR3 mux, the two
   instances in a generate block under the `ENABLE_GUS` parameter.
@@ -126,7 +153,10 @@ the GUS there:
    when it added its second master; the same fix is in upstream pull request #97.
 4. Add the OSD option, the mix term and `ENABLE_GUS` in the top level.
 
-Nothing in the GUS path depends on this fork's video work.
+Nothing in the GUS path depends on this fork's video work. The stock core has no line fetcher, so
+the long waits described above do not occur there: the card only ever waits for single beats of
+`main_memory`. The gate is part of `gus.sv` and comes along all the same; it is what makes the
+wrapper safe behind any memory, however slow.
 
 ## Cost and timing (DE10-Nano, Quartus 17.1, 85 MHz)
 
@@ -154,13 +184,14 @@ Simulation (`tests/tb_gus.sv`, Icarus Verilog), against a memory model with rand
   memory is slow;
 - accesses in quick succession (a tight read-back, a poke followed at once by a peek, a tight
   upload) with fourteen voices playing and with the port taken away for 600 of every 2700 clocks,
-  and a 200-word DMA upload on that busy port: no error. Without the wait described under "One
-  trap" the first three fail.
+  and a 200-word DMA upload on that busy port: no error. With the first version of the wrapper
+  the first three fail.
 
 Hardware (DE10-Nano, the Future Crew demo disk with Gravis's software and `ULTRASND=240,7,7,7,7`):
 
-- a small test program reads the four 256 KB banks back distinct (1 MB), uploads 32 words over
-  DMA channel 7 with every byte right, and receives the interrupt on IRQ 7;
+- a small test program reads the four 256 KB banks back distinct (1 MB), uploads 4 KB over DMA
+  channel 7 with every byte right, and receives the interrupt on IRQ 7; another pokes 64 KB
+  through the DRAM port and reads it back twice;
 - Second Reality with its Gravis UltraSound option plays through, with sound;
 - Gravis's ULTRAMOD plays; PLAYMIDI and PLAYFILE behave as on the ao486 GUS core;
 - the card together with an SVGA framebuffer mode: a stress program runs fourteen voices from
@@ -168,8 +199,7 @@ Hardware (DE10-Nano, the Future Crew demo disk with Gravis's software and `ULTRA
   memory, card memory and voice registers back while the picture is shown. No mismatch (15 million
   picture bytes, 2 to 6 million card bytes per run), and the picture is bit-identical with and
   without the voices. A 4 KB DMA upload is correct with the SVGA mode on screen. This is the test
-  that found the trap: before the wait was added, about 1.6 % of the card memory reads were wrong
-  there.
+  that found the fault of the first version (see "What the held clock asks for").
 
 ## Known gaps
 
