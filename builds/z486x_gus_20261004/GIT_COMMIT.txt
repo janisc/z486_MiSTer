@@ -1,0 +1,1 @@
+73df0f0b746ec129764757edd5e67767f3fb43c0 GUS: an access waits for the end of the chip's memory cycle (fitter seed 6 of the sweep of 2026-10-04; the later commits on the branch touch the testbench and the docs only)
