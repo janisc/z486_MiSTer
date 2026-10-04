@@ -123,9 +123,23 @@ reg        read_d;
 reg        write_d;
 wire       gf1_read   = read  & gus_cs;
 wire       gf1_write  = write & (gus_cs | fm_cs);
-wire       read_cont  = (~read_d  & gf1_read)  | (|read_wait);
-wire       write_cont = (~write_d & gf1_write) | (|write_wait);
-assign     io_wait    = enable & (gf1_wait | read_cont | write_cont);
+
+// An access reaches the chip only while the chip is not in one of its memory cycles. The chip clock
+// stands still during those (see above), which freezes the model's phase signals in a state the
+// real chip passes through in a hundred nanoseconds: the phase that ends a CPU memory access or a
+// voice register write is still on while the voice's memory cycle waits. An access that began
+// there was acknowledged by the leftovers of the one before it: a peek returned the previous byte,
+// a poke or a voice register write was dropped. It took a slow port to see it (the line fetcher
+// of an SVGA mode holding the memory for a few hundred clocks, once per video line). The bus now
+// waits for the end of the memory cycle and the access starts in the phase after it.
+reg        read_due, write_due;
+wire       read_new   = ~read_d  & gf1_read;
+wire       write_new  = ~write_d & gf1_write;
+wire       read_go    = (read_new  | read_due)  & ~dram_access;
+wire       write_go   = (write_new | write_due) & ~dram_access;
+wire       read_cont  = read_go  | (|read_wait);
+wire       write_cont = write_go | (|write_wait);
+assign     io_wait    = enable & (gf1_wait | read_cont | write_cont | read_new | write_new | read_due | write_due);
 
 wire [7:0] readdata_gf1;
 assign     readdata = isgf1addr ? readdata_gf1 : 8'hff;
@@ -178,8 +192,12 @@ gf1 gf1 (
 always @(posedge clk) begin
 	read_d     <= gf1_read;
 	write_d    <= gf1_write;
-	read_wait  <= { read_wait[0],  (~read_d  & gf1_read)  ? 1'b1 : 1'b0 };
-	write_wait <= { write_wait[0], (~write_d & gf1_write) ? 1'b1 : 1'b0 };
+	read_wait  <= { read_wait[0],  read_go };
+	write_wait <= { write_wait[0], write_go };
+	if (read_go)        read_due  <= 1'b0;
+	else if (read_new)  read_due  <= 1'b1;
+	if (write_go)       write_due <= 1'b0;
+	else if (write_new) write_due <= 1'b1;
 
 	if (ismixeraddr & write) begin
 		dmairq_regsel <= writedata[6];
@@ -188,6 +206,8 @@ always @(posedge clk) begin
 	if (reset) begin
 		dmairq_regsel <= 0;
 		dmairq_enable <= 0;
+		read_due      <= 0;
+		write_due     <= 0;
 	end
 end
 

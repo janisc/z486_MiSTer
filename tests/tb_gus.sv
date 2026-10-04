@@ -56,6 +56,7 @@ reg   [7:0] cap = 0;
 reg   [7:0] early = 0;       // the data in the first clock without wait (where ao486's bus captures)
 reg   [2:0] st = 0;
 integer     wait_cycles = 0, wait_max = 0;
+integer     io_gap = 0;      // idle clocks after each I/O operation (the CPU's own time between two of them)
 
 always @(posedge clk) begin
 	io_read  <= 0;
@@ -94,6 +95,7 @@ begin
 	@(posedge done);
 	@(posedge clk); req_wr <= 0;
 	@(posedge clk);
+	repeat (io_gap) @(posedge clk);
 end
 endtask
 
@@ -104,6 +106,7 @@ begin
 	d = cap;
 	@(posedge clk); req_rd <= 0;
 	@(posedge clk);
+	repeat (io_gap) @(posedge clk);
 end
 endtask
 
@@ -178,13 +181,15 @@ reg [63:0] ddr [0:131071];
 integer    busy_pct = 0, lat_max = 1;
 integer    rd_count = 0, wr_count = 0, req_count = 0;
 integer    resp_cnt = 0;
+integer    blk_len = 0, blk_period = 2700, blk_cnt = 0;   // port unavailable for blk_len clocks out of blk_period
 reg [16:0] resp_idx = 0;
 reg        resp_pending = 0;
 integer    j;
 initial for (j = 0; j < 131072; j = j + 1) ddr[j] = 64'hDEADBEEF_0BADF00D ^ {j[15:0], j[15:0], j[15:0], j[15:0]};
 
 always @(posedge clk) begin
-	ddr_busy       <= ($urandom % 100) < busy_pct;
+	blk_cnt        <= (blk_cnt + 1 >= blk_period) ? 0 : blk_cnt + 1;
+	ddr_busy       <= (($urandom % 100) < busy_pct) || (blk_cnt < blk_len);
 	ddr_dout_ready <= 0;
 	if ((ddr_rd | ddr_we) && (ddr_addr[28:17] != BASE[28:17])) begin
 		$display("FAIL: access outside the megabyte, address %h", ddr_addr); $finish;
@@ -341,6 +346,143 @@ begin
 end
 endtask
 
+// ---------------------------------------------------------------- accesses in quick succession while the memory is slow
+// What a tight upload or read-back loop does (address register, then the DRAM port), with voices
+// playing from different places (every voice slot is a real bus read) and with the port taken away
+// for a few hundred clocks once per video line, as the line fetcher of an SVGA mode does. The chip
+// clock stands still for all of that time; no access may be answered by the leftovers of the one before.
+task gus_reg16(input [7:0] r, input [15:0] d);
+begin
+	io_wr(16'h343, r);
+	io_wr(16'h344, d[7:0]);
+	io_wr(16'h345, d[15:8]);
+end
+endtask
+
+task voice_addr(input [7:0] r, input [19:0] a);     // "high" register r, "low" register r + 1
+begin
+	gus_reg16(r, {3'b000, a[19:7]});
+	gus_reg16(r + 8'd1, {a[6:0], 9'd0});
+end
+endtask
+
+task gus_rd16(input [7:0] r, output [15:0] d);
+	reg [7:0] lo, hi;
+begin
+	io_wr(16'h343, r);
+	io_rd(16'h344, lo);
+	io_rd(16'h345, hi);
+	d = {hi, lo};
+end
+endtask
+
+integer    vv, pp, bad_peek, bad_pair, bad_poke, bad_reg;
+reg [15:0] r16;
+function [7:0] pat(input integer a, input [7:0] salt);
+	pat = (a[7:0] ^ a[15:8]) + 8'h33 + salt;
+endfunction
+
+task start_voices(input integer count);
+begin
+	gus_reg8(8'h0E, 8'hCD);                     // 14 voices
+	gus_reg8(8'h4C, 8'h03);                     // run, DAC on
+	for (vv = 0; vv < count; vv = vv + 1) begin
+		io_wr(16'h342, vv[7:0]);
+		gus_reg8(8'h00, 8'h03);
+		gus_reg8(8'h0D, 8'h03);
+		gus_reg16(8'h01, 16'h0400 + vv * 16'h0040);
+		voice_addr(8'h02, 20'h60000 + vv * 20'h01000);
+		voice_addr(8'h0A, 20'h60000 + vv * 20'h01000);
+		voice_addr(8'h04, 20'h60FFF + vv * 20'h01000);
+		gus_reg16(8'h09, 16'h0000);
+		gus_reg8(8'h0C, 8'h07);
+		gus_reg8(8'h00, 8'h08);                 // running, looping
+	end
+end
+endtask
+
+task stop_voices;
+begin
+	for (vv = 0; vv < 14; vv = vv + 1) begin
+		io_wr(16'h342, vv[7:0]);
+		gus_reg8(8'h00, 8'h03);
+	end
+end
+endtask
+
+task quick_access(input integer voices, input integer blk, input integer gap, input [7:0] salt);
+begin
+	busy_pct = 0; lat_max = 12; blk_len = 0; io_gap = gap;
+	bad_peek = 0; bad_pair = 0; bad_poke = 0; bad_reg = 0;
+	for (n = 0; n < 512; n = n + 1) poke(20'h40000 + n, pat(n, salt));
+	if (voices > 0) start_voices(voices);
+	blk_len = blk;
+
+	// read-back in a tight loop
+	io_wr(16'h343, 8'h44); io_wr(16'h345, 8'h04);
+	for (pp = 0; pp < 4; pp = pp + 1)
+		for (n = 0; n < 512; n = n + 1) begin
+			io_wr(16'h343, 8'h43); io_wr(16'h344, n[7:0]); io_wr(16'h345, n[15:8]);
+			io_rd(16'h347, v);
+			if (v !== pat(n, salt)) begin
+				bad_peek = bad_peek + 1;
+				if (bad_peek <= 3) $display("    peek %05h: read %02h, expected %02h", 20'h40000 + n, v, pat(n, salt));
+			end
+		end
+
+	// a poke and a peek of the same byte, back to back
+	io_wr(16'h343, 8'h44); io_wr(16'h345, 8'h08);
+	for (n = 0; n < 1024; n = n + 1) begin
+		io_wr(16'h343, 8'h43); io_wr(16'h344, n[7:0]); io_wr(16'h345, n[15:8]);
+		io_wr(16'h347, ~n[7:0]);
+		io_rd(16'h347, v);
+		if (v !== ~n[7:0]) begin
+			bad_pair = bad_pair + 1;
+			if (bad_pair <= 3) $display("    pair %05h: read %02h, expected %02h", 20'h80000 + n, v, ~n[7:0]);
+		end
+	end
+
+	// an upload in a tight loop, verified afterwards at leisure
+	io_wr(16'h343, 8'h44); io_wr(16'h345, 8'h0C);
+	for (n = 0; n < 1024; n = n + 1) begin
+		io_wr(16'h343, 8'h43); io_wr(16'h344, n[7:0]); io_wr(16'h345, n[15:8]);
+		io_wr(16'h347, pat(n, salt ^ 8'h5A));
+	end
+
+	// voice registers written one after the other and read back: the loop start (two 16-bit registers)
+	// of a voice outside the 14 active ones
+	for (pp = 0; pp < 64; pp = pp + 1) begin
+		io_wr(16'h342, 8'd20);
+		gus_reg16(8'h02, 16'(pp * 131 + salt) & 16'h1FFF);
+		gus_reg16(8'h03, ~16'(pp * 517 + salt) & 16'hFE00);
+		gus_rd16(8'h82, r16);
+		if ((r16 & 16'h1FFF) !== (16'(pp * 131 + salt) & 16'h1FFF)) begin
+			bad_reg = bad_reg + 1;
+			if (bad_reg <= 3) $display("    voice register 02: read %04h, expected %04h", r16 & 16'h1FFF, 16'(pp * 131 + salt) & 16'h1FFF);
+		end
+		gus_rd16(8'h83, r16);
+		if ((r16 & 16'hFE00) !== (~16'(pp * 517 + salt) & 16'hFE00)) begin
+			bad_reg = bad_reg + 1;
+			if (bad_reg <= 3) $display("    voice register 03: read %04h, expected %04h", r16 & 16'hFE00, ~16'(pp * 517 + salt) & 16'hFE00);
+		end
+	end
+
+	blk_len = 0;
+	if (voices > 0) stop_voices;
+	for (n = 0; n < 1024; n = n + 1) begin
+		peek(20'hC0000 + n, v);
+		if (v !== pat(n, salt ^ 8'h5A)) begin
+			bad_poke = bad_poke + 1;
+			if (bad_poke <= 3) $display("    upload %05h: holds %02h, expected %02h", 20'hC0000 + n, v, pat(n, salt ^ 8'h5A));
+		end
+	end
+	io_gap = 0;
+	$display("quick accesses, %0d voices, port away %0d of %0d clocks, %0d clocks between accesses: read-back %0d wrong of 2048, poke+peek %0d of 1024, upload %0d of 1024, voice registers %0d of 128",
+	         voices, blk, blk_period, gap, bad_peek, bad_pair, bad_poke, bad_reg);
+	errors = errors + bad_peek + bad_pair + bad_poke + bad_reg;
+end
+endtask
+
 initial begin
 	ta[0]  = 20'h00000; tv[0]  = 8'hAA;
 	ta[1]  = 20'h00001; tv[1]  = 8'h55;
@@ -365,6 +507,7 @@ initial begin
 	gus_reg8(8'h4C, 8'h01);
 	repeat (4000) @(posedge clk);
 
+	if (!$test$plusargs("quick")) begin
 	run_pass(0, 1, 8'h00);       // ideal memory: answers in the next clock
 	run_pass(0, 12, 8'h11);      // DDR3-like latency
 	run_pass(30, 12, 8'h22);     // with waitrequest
@@ -387,6 +530,23 @@ initial begin
 	dma_upload(30, 12, 16'h0030, 16, 8'h80);
 	dma_upload(60, 40, 16'h0040, 16, 8'hC0);
 	$display("after the DMA uploads: %0d errors", errors);
+	end
+
+	// 40 clocks between accesses is what z486 manages in a tight loop; a line fetch takes 200 to 650
+	// clocks, depending on the mode
+	quick_access(0, 0, 40, 8'h00);        // card idle, port free
+	quick_access(14, 0, 40, 8'h10);       // voices playing
+	quick_access(0, 600, 40, 8'h20);      // an SVGA mode's line fetcher on the port
+	quick_access(14, 600, 40, 8'h30);     // both
+	quick_access(14, 250, 12, 8'h40);     // faster than the CPU can
+
+	// a DMA upload while the voices play and the port is taken away once per line
+	start_voices(14);
+	blk_len = 600;
+	dma_upload(0, 12, 16'h0050, 200, 8'h21);
+	blk_len = 0;
+	stop_voices;
+	$display("after the DMA upload on a busy port: %0d errors", errors);
 
 	// chip clock: nominal number of transitions per second while the memory is slow
 	busy_pct = 30; lat_max = 12;
