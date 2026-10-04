@@ -43,6 +43,22 @@ at most one CPU access, so there is room to repay a memory latency of some tens 
 slot. Longer stalls are carried over: up to 255 transitions (about 13 microseconds) are
 remembered.
 
+### One trap: accesses while the clock is held
+
+While the chip clock is held, the model's phase signals stay as they are, and neighbouring phases
+of its ring overlap by design. One such pair is the phase that ends a CPU access to the sample
+memory and the phase of the voice's memory cycle, which follows it. Held there for as long as the
+memory takes, the model answers a new CPU access to the DRAM port (3x7) with the end condition of
+the previous one: a peek returns the previous byte and a poke is not written. With a DDR3 read of
+a dozen clocks no CPU is fast enough to get there. With the port taken for a few hundred clocks
+it happens once per video line: that is what the line fetcher of an SVGA framebuffer mode does
+in this fork. Voice register accesses are not affected (the model latches their register number
+and data before the overlap).
+
+So the wrapper passes an I/O strobe on to the model only while the model is outside its memory
+cycles (`dram_access` low) and holds the bus with `io_wait` until then. The access then starts
+in the phase after the memory cycle, which is where the real chip would see it.
+
 ## The pieces
 
 | File | Role |
