@@ -386,6 +386,8 @@ wire        io_bus_ready;
 wire [31:0] inta_din;
 wire        inta_ready;
 
+wire        ide0_nodata, ide1_nodata;
+reg         ide0_wait = 1'b0, ide1_wait = 1'b0;
 reg         ide0_cs;
 reg         ide1_cs;
 reg         floppy0_cs;
@@ -859,6 +861,8 @@ iobus_adapter iobus_adapter (
     .ide_writedata     (iobus_ide_writedata),
     .ide_readdata      (ide0_cs ? ide0_readdata : ide1_readdata),
     .ide_32            (iobus_ide_32),
+    .ide_hold          (ide0_wait | ide1_wait |
+                        (iobus_ide_read && ((ide0_cs && ide0_nodata) || (ide1_cs && ide1_nodata)))),
     // Direct-handled (unused)
     .direct_readdata   (8'hFF),
     .direct_handled    (1'b0)
@@ -1077,12 +1081,23 @@ assign dbg_avm_ready        = avm_ready;
 assign dbg_avm_resp_valid   = avm_readdatavalid;
 assign dbg_cpu_din_z        = cpu_din_z;
 
+// Fast IDE reads, as on ao486: the HPS raises DRQ before the sector is in the
+// buffer, and a data-port read that gets ahead of it (no_data) keeps io_read
+// asserted until the word arrives while iobus_adapter holds the CPU cycle.
+always @(posedge clk_sys) begin
+	if (iobus_ide_read & ide0_cs & ide0_nodata & (iobus_ide_address == 4'd0)) ide0_wait <= 1'b1;
+	if (~ide0_nodata) ide0_wait <= 1'b0;
+	if (iobus_ide_read & ide1_cs & ide1_nodata & (iobus_ide_address == 4'd0)) ide1_wait <= 1'b1;
+	if (~ide1_nodata) ide1_wait <= 1'b0;
+end
+
 // IDE0: mux between byte-sequential (iobus_address) and 32-bit (iobus_ide_*) paths
-wire        ide0_io_read  = (iobus_read & ide0_cs) | (iobus_ide_read & ide0_cs);
+wire        ide0_wide     = iobus_ide_read | iobus_ide_write | ide0_wait;
+wire        ide0_io_read  = (iobus_read & ide0_cs) | (iobus_ide_read & ide0_cs) | ide0_wait;
 wire        ide0_io_write = (iobus_write & ide0_cs) | (iobus_ide_write & ide0_cs);
-wire [3:0]  ide0_io_addr  = (iobus_ide_read | iobus_ide_write) ? iobus_ide_address : ide_address;
-wire [31:0] ide0_io_wdata = (iobus_ide_read | iobus_ide_write) ? iobus_ide_writedata : {24'h0, iobus_writedata_byte};
-wire        ide0_io_32    = (iobus_ide_read | iobus_ide_write) ? iobus_ide_32 : 1'b0;
+wire [3:0]  ide0_io_addr  = ide0_wide ? iobus_ide_address : ide_address;
+wire [31:0] ide0_io_wdata = ide0_wide ? iobus_ide_writedata : {24'h0, iobus_writedata_byte};
+wire        ide0_io_32    = ide0_wide ? iobus_ide_32 : 1'b0;
 
 ide ide0
 (
@@ -1096,8 +1111,8 @@ ide ide0
 	.io_readdata       (ide0_readdata),
 	.io_32             (ide0_io_32),
 
-	.use_fast          (1'b0),
-	.no_data           (),
+	.use_fast          (1'b1),
+	.no_data           (ide0_nodata),
     .drive_en          (),
     .io_wait           (),
 
@@ -1111,11 +1126,12 @@ ide ide0
 	.irq               (irq_14)
 );
 
-wire        ide1_io_read  = (iobus_read & ide1_cs) | (iobus_ide_read & ide1_cs);
+wire        ide1_wide     = iobus_ide_read | iobus_ide_write | ide1_wait;
+wire        ide1_io_read  = (iobus_read & ide1_cs) | (iobus_ide_read & ide1_cs) | ide1_wait;
 wire        ide1_io_write = (iobus_write & ide1_cs) | (iobus_ide_write & ide1_cs);
-wire [3:0]  ide1_io_addr  = (iobus_ide_read | iobus_ide_write) ? iobus_ide_address : ide_address;
-wire [31:0] ide1_io_wdata = (iobus_ide_read | iobus_ide_write) ? iobus_ide_writedata : {24'h0, iobus_writedata_byte};
-wire        ide1_io_32    = (iobus_ide_read | iobus_ide_write) ? iobus_ide_32 : 1'b0;
+wire [3:0]  ide1_io_addr  = ide1_wide ? iobus_ide_address : ide_address;
+wire [31:0] ide1_io_wdata = ide1_wide ? iobus_ide_writedata : {24'h0, iobus_writedata_byte};
+wire        ide1_io_32    = ide1_wide ? iobus_ide_32 : 1'b0;
 
 ide ide1
 (
@@ -1129,8 +1145,8 @@ ide ide1
 	.io_readdata       (ide1_readdata),
 	.io_32             (ide1_io_32),
 
-	.use_fast          (1'b0),
-	.no_data           (),
+	.use_fast          (1'b1),
+	.no_data           (ide1_nodata),
     .drive_en          (),
     .io_wait           (),
 
