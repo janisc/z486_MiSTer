@@ -21,6 +21,11 @@ kinds of display.
 HDMI works as on every core in both cases and shows the same picture through the
 scaler. The FAQ below has the setup for each display, what works and what does not.
 
+Since release 11 the core also carries, as an experiment and off by default, a
+**Gravis UltraSound**: xolod79's GF1 model from ao486 with its sample memory in the
+HPS DDR3, since z486 keeps its main memory in the SDRAM. The FAQ has the settings
+and [docs/GUS.md](docs/GUS.md) the how.
+
 The changes are on branch `native-vga`; `main` tracks upstream. Experiments,
 including a parked real dot-clock PLL, are on `exp/*` branches. The rbf files of
 every build made along the way, with a description of each, are in
@@ -125,11 +130,28 @@ hi-colour ones. Games that require VBE 2.0 need SciTech UniVBE or Display Doctor
 new core build over an old UniVBE setup, run UVCONFIG once: it caches what it
 detected, including the RAMDAC.
 
+**Is there a Gravis UltraSound?**
+Yes, as an experiment, since release 11, and off by default. Switch `Gravis
+UltraSound` to `On` on the OSD's Audio & Video page and the card is there at the
+usual place: port 240h, IRQ 7, DMA 7, 1 MB of sample memory, so
+`SET ULTRASND=240,7,7,7,7` in AUTOEXEC.BAT. The Sound Blaster stays at 220h, IRQ 5,
+DMA 1 and 5, so one disk can serve both. The card is xolod79's GF1 model from the GUS
+branch of ao486_MiSTer, unchanged; what is new is where its memory lives, in the HPS
+DDR3, because the SDRAM is z486's main memory ([docs/GUS.md](docs/GUS.md) explains
+how, and how to do the same in the stock core). Gravis's own software (ULTRINIT, the
+patch set for MIDI, the players) is not included; the old-software archives carry it,
+and the Future Crew demo disk of the 0MHz collection comes with a set. The resources
+are fixed: a program that insists on another IRQ, another DMA channel or an 8-bit DMA
+channel should be pointed at the Sound Blaster instead. Not tried yet: a game that
+uses an SVGA mode and the GUS at the same time; the fork's own test program for that
+combination is clean.
+
 **Some settings disappeared from the Audio & Video menu. Why?**
-Compared with the stock core, three options are gone: `VSync`, which retimed the
-raster to 60 Hz and has no place when the analog port carries the real timing, and
-`16/24bit mode` and `16bit format`, which asked the user to guess the pixel format
-of the hi-colour modes. The emulated RAMDAC now has the command register
+Compared with the stock core, three options are gone and two are added. Gone are
+`VSync`, which retimed the raster to 60 Hz and has no place when the analog port
+carries the real timing, and `16/24bit mode` and `16bit format`, which asked the
+user to guess the pixel format of the hi-colour modes. Added are `Analog output`
+and `Gravis UltraSound`. The emulated RAMDAC now has the command register
 the BIOS and the Windows driver program, so the format is whatever they set, as on
 a real card. `Border` stays and applies to both outputs. The aim was to remove
 combinations that did not make sense, not functionality; if something you need is
@@ -140,9 +162,23 @@ On the CRT: DOS text modes, Doom, Commander Keen (EGA), SimCity 2000 and Panzer
 General (640x480x256), Steel Panthers, Indiana Jones Desktop Adventures under
 Windows 3.1 (640x480 hi-colour), Scorched Earth 1.5 at 1024x768 (256 colours), the demos Copper (per-line raster tricks) and
 Legend, and SciTech's VBETEST in every colour depth including 16-page 320x200
-hi-colour page flipping. The test tools (register dumps, retrace counters, VRAM
-banking, a resident INT 10h logger) and the debug floppy are described in
+hi-colour page flipping. On release 11 (z486 20261003) the regression list was run
+again: Doom, Descent, Lemmings, Full Throttle, Day of the Tentacle, Commander Keen 2,
+Alone in the Dark, BattleTech, SimCity 2000, Copper, Legend, Demoded and Indiana Jones
+Desktop Adventures run; with the Gravis UltraSound, Second Reality, Legend and
+Demoded. The test tools (register dumps, retrace counters, VRAM banking, a resident
+INT 10h logger, the GUS memory tests) and the debug floppy are described in
 [`builds/BUILDS.md`](builds/BUILDS.md).
+
+**Which z486 is this built on, and what is known not to work?**
+Release 11 is built on z486 20261003, with the new CPU and peripherals; Alone in the
+Dark and BattleTech run on it, which they did not before. Known at this version, on
+the stock 20261003 core as well and reported upstream: Second Reality freezes on its
+title picture with the Sound Blaster (with the GUS it plays through), and Alone in
+the Dark 2 draws its small font with displaced pixel rows. Beneath a Steel Sky ends
+in a General Protection Fault and Crusader: No Regret reboots in a loop, as on every
+z486 so far (Origin's engine family, upstream issues #66 and #85). The fork's own
+limits are in the entry below.
 
 **Which modes do not work on the CRT?**
 A full VBETEST sweep of every VBE mode found these limits. 1280x1024 loses the CRT: this
@@ -218,6 +254,16 @@ flipping is tear-free on the analog output. SciTech's VBETEST (in the SDD 5.3a
 package) exercises all of this and is the fork's regression suite for the SVGA
 framebuffer modes.
 
+The Gravis UltraSound is xolod79's GF1 model (`src/soc/sound/gus/gf1.v`, unchanged)
+with a new wrapper around it. The model treats the chip's 9.88 MHz clock as a signal
+it samples, so the wrapper generates that clock and holds it while the sample memory
+answers; the memory can then be anything with a request and an acknowledge, here a
+third master on the DDR3 port next to the framebuffer paths. The chip never notices
+the slower memory, and the held clock is repaid afterwards, so the pitch stays right.
+One consequence of the held clock (an access from the CPU has to wait for the chip's
+memory cycle), the memory port, the cost and the tests are in
+[docs/GUS.md](docs/GUS.md), which also says how to put the same into the stock core.
+
 ## Thanks
 
 This fork exists because of other people's work:
@@ -230,6 +276,9 @@ This fork exists because of other people's work:
   framework, the analog output path and the scaler integration, and **Till Harbaum**
   for the origins of the HPS interface.
 - **TEMLIB** for the ascal scaler, including the August 2026 fix this fork carries.
+- **xolod79** for the Gravis UltraSound: the GF1 chip model and its register glue
+  come from the GUS branch of his ao486_MiSTer fork (since merged into MiSTer-devel's
+  ao486), and the GF1 file is his, unchanged.
 - SciTech's VBETEST, the DOSBox-X project and the CRT Terminator SCROLL tool did the
   measuring and the reference work during testing.
 
