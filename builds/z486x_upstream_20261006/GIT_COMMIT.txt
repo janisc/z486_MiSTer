@@ -1,0 +1,1 @@
+554af20b5e2f7c9eeb25c16c8a5f53da6397e5b2 Merge upstream 20261006 (direct build with the production profile, fitter seed 6; 39,746 ALMs = 95 %, 490 M10K, clk_sys -6.264 / TNS -27516, pll_hdmi +0.227)
