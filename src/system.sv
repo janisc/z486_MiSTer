@@ -138,6 +138,9 @@ module system (
     input   [1:0] ram_size,       // 0/1/2/3 = 16/32/64/128MB exposed to software
     input         uma_ram,
 	input   [1:0] cpu_speed_osd,  // 0=full, 1=15, 2=30, 3=56 MHz
+	input         fast_off,       // Dev menu: fast paths off
+	input         cache_off,      // Dev menu: L1 caches off
+	input         x87_off,        // Dev menu: no coprocessor (at reset)
 	output  [7:0] syscfg,
 
 	output wire        video_ce,
@@ -514,6 +517,9 @@ z486 #(
     .snoop_valid       (dma_snoop_valid),
     .a20_enable        (a20_enable),
 	.cpu_speed_sel     (ctlport[7] ? ctlport[1:0] : cpu_speed_osd),
+	.fast_off_req      (fast_off),
+	.cache_off_req     (cache_off),
+	.x87_off_req       (x87_off),
     .single_step       (1'b0),
     .dbg_CS            (debug_cpu_cs),
     .dbg_EIP           (debug_cpu_eip),
