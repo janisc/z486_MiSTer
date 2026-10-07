@@ -166,19 +166,26 @@ hi-colour page flipping. On release 11 (z486 20261003) the regression list was r
 again: Doom, Descent, Lemmings, Full Throttle, Day of the Tentacle, Commander Keen 2,
 Alone in the Dark, BattleTech, SimCity 2000, Copper, Legend, Demoded and Indiana Jones
 Desktop Adventures run; with the Gravis UltraSound, Second Reality, Legend and
-Demoded. The test tools (register dumps, retrace counters, VRAM banking, a resident
+Demoded. Release 12 (z486 20261006) was spot-checked rather than run through the
+list: Alone in the Dark 2, Crusader: No Regret and Second Reality with the Sound
+Blaster run now, Beneath a Steel Sky with `RAM Size` at 16 MB, and the titles tried
+from the list ran as before. The test tools (register dumps, retrace counters, VRAM banking, a resident
 INT 10h logger, the GUS memory tests) and the debug floppy are described in
 [`builds/BUILDS.md`](builds/BUILDS.md).
 
 **Which z486 is this built on, and what is known not to work?**
-Release 11 is built on z486 20261003, with the new CPU and peripherals; Alone in the
-Dark and BattleTech run on it, which they did not before. Known at this version, on
-the stock 20261003 core as well and reported upstream: Second Reality freezes on its
-title picture with the Sound Blaster (with the GUS it plays through), and Alone in
-the Dark 2 draws its small font with displaced pixel rows. Beneath a Steel Sky ends
-in a General Protection Fault and Crusader: No Regret reboots in a loop, as on every
-z486 so far (Origin's engine family, upstream issues #66 and #85). The fork's own
-limits are in the entry below.
+Release 12 is built on z486 20261006, whose CPU brought protection and fault fixes
+for Windows 95 and games. With it the two faults of release 11 are gone: Second
+Reality plays through with the Sound Blaster, and Alone in the Dark 2 draws its text
+right; Crusader: No Regret, which rebooted in a loop on every z486 so far, runs as
+well. Beneath a Steel Sky runs with `RAM Size` at 16 MB; with more memory it ends in
+a General Protection Fault, a known matter noted in upstream's release notes. Two
+upstream changes to know about: the Hardware
+page of the OSD has switches for the CPU's fast paths, L1 cache and x87 (`CPU
+Pipeline: Compatible` is the one to try when a program misbehaves), and the `RAM
+Size` option was reordered so that a fresh configuration gives 64 MB; an existing
+`Z486.CFG` that said 16 MB reads 64 MB now, set it again if you want 16. The fork's
+own limits are in the entry below.
 
 **Which modes do not work on the CRT?**
 A full VBETEST sweep of every VBE mode found these limits. 1280x1024 loses the CRT: this
@@ -192,7 +199,11 @@ also repeat the picture vertically: the legacy VGA memory is four 64 KB planes, 
 and ao486. 800x600 in 24 bit is beyond the analog port at the core's 85 MHz. UniVBE's own
 640x350 and 640x400 15-bit modes program a halved dot clock and run at 15.7 kHz; the BIOS's
 15-bit modes are fine. Everything at 320x200, 640x400, 640x480 and 800x600 in 8, 15 and 16
-bit, and 640x480 in 24 bit, works on both outputs.
+bit, and 640x480 in 24 bit, works on both outputs. One VBETEST screen is off by design: its
+24-bit horizontal scroll walks a 1360-pixel-wide buffer sideways by single pixels, which
+three bytes per pixel and a start address counted in four-byte units cannot express; the
+CRT snaps to 2.67-pixel steps and HDMI shows the window displaced. No program scrolls a
+banked 24-bit buffer that way.
 
 **Will this go into z486 or ao486?**
 Maybe. This started as an experiment and we are happy with the result, but more
