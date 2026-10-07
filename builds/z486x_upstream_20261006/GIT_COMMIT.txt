@@ -1,1 +1,1 @@
-554af20b5e2f7c9eeb25c16c8a5f53da6397e5b2 Merge upstream 20261006 (direct build with the production profile, fitter seed 6; 39,746 ALMs = 95 %, 490 M10K, clk_sys -6.264 / TNS -27516, pll_hdmi +0.227)
+554af20b5e2f7c9eeb25c16c8a5f53da6397e5b2 Merge upstream 20261006 (build 2 = fitter seed 4 of the sweep of 2026-10-06/07: 39,709 ALMs = 95 %, clk_sys -5.877 / TNS -25204, pll_hdmi +0.356; build 1 was the direct build with seed 6)
