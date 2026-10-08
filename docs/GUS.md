@@ -133,7 +133,7 @@ still that long and is repaid afterwards.
 - `src/system.sv`: registered select for 240h-24Fh and 340h-34Fh, the read data mux, DMA
   channel 7 (the controller had the channel, unconnected), `interrupt[7]`, the DDR3 mux, the two
   instances in a generate block under the `ENABLE_GUS` parameter.
-- `z486_mister.sv`: OSD option `Gravis UltraSound` (status[51], default Off), the GUS added to
+- `z486_mister.sv`: OSD option `Gravis UltraSound` (status[117], default Off), the GUS added to
   the audio mix, `ENABLE_GUS(1'b1)`.
 
 Resources as in ao486: `ULTRASND=240,7,7,7,7`. The Sound Blaster stays at 220h, IRQ 5, DMA 1/5.

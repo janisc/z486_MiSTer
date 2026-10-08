@@ -134,12 +134,12 @@ localparam CONF_STR = {
 	"P1,Audio & Video;",
 	"P1-;",
 	"P1OMN,Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
-	"P1O7,Analog output,VGA 31kHz,TV 15kHz;",
-	"h2P1OA,TV frame rate,60 Hz,Native;",
-	"h2P1OB,TV picture,Native size,Fill;",
-	"h2P1OEG,TV H-position,0,+0.5us,-0.5us,-1us,-1.5us,-2us,-2.5us,-3us;",
-	"h2P1OQS,TV V-position,0,+4,+8,+12,+16,-4,-8,-12;",
-	"h2P1O[24],TV hi-res modes,Line drop,Interlace;",
+	"P1O[127],Analog output,VGA 31kHz,TV 15kHz;",
+	"h2P1O[126],TV frame rate,60 Hz,Native;",
+	"h2P1O[125],TV picture,Native size,Fill;",
+	"h2P1O[124:122],TV H-position,0,+0.5us,-0.5us,-1us,-1.5us,-2us,-2.5us,-3us;",
+	"h2P1O[120:118],TV V-position,0,+4,+8,+12,+16,-4,-8,-12;",
+	"h2P1O[121],TV hi-res modes,Line drop,Interlace;",
 	"P1oDE,Scale,Normal,V-Integer,Narrower HV-Integer,Wider HV-Integer;",
 	"P1oM,Border,Yes,No;",
 	"P1-;",
@@ -149,7 +149,7 @@ localparam CONF_STR = {
 	"P1oBC,Stereo Mix,none,25%,50%,100%;",
 	"P1oO,SB Swap L/R,Off,On;",
 	"P1OP,MT32 Volume Ctl,MIDI,Line-In;",
-	"P1oJ,Gravis UltraSound,Off,On;",
+	"P1O[117],Gravis UltraSound,Off,On;",
 	"-;",
 	"P2,Hardware;",
 	"P2o01,Boot 1st,Floppy/Hard Disk,Floppy,Hard Disk,CD-ROM;",
@@ -233,7 +233,7 @@ wire        ps2_mouse_clk_in;
 wire        ps2_mouse_data_in;
 
 wire        core_ce_pixel;
-wire        tv15_en = status[7];   // OSD "Analog output" = TV 15kHz
+wire        tv15_en = status[127];   // OSD "Analog output" = TV 15kHz
 wire        core_hs_neg;
 wire        core_vs_neg;
 wire  [7:0] core_r;
@@ -839,8 +839,8 @@ system #(
 	.video_f60           (video_f60),
 	.video_border        (~status[54]),  // OSD "Border" (oM): show the overscan border (both outputs share one raster)
 	.video_tvmode        (tv15_en),
-	.video_vstretch      (tv15_en & ~status[10]),  // OSD "TV frame rate" (OA): 60 Hz pads 70 Hz frames to 524 rows in TV mode
-	.video_vzoom         (tv15_en & status[11]),   // OSD "TV picture" (OB): Fill = every 5th display scanline twice (200 rows into 240 TV lines)
+	.video_vstretch      (tv15_en & ~status[126]), // OSD "TV frame rate" (O[126]): 60 Hz pads 70 Hz frames to 524 rows in TV mode
+	.video_vzoom         (tv15_en & status[125]),  // OSD "TV picture" (O[125]): Fill = every 5th display scanline twice (200 rows into 240 TV lines)
 	.video_vodd          (tv_ilace),                // the TV stage interlaces this picture: odd row count
 	.video_fb_native     (fb_native),
 	.video_fb_bpp        (fb_bpp),
@@ -876,7 +876,7 @@ system #(
 	.sample_opl_r        (sample_opl_r),
 	.sample_gus_l        (sample_gus_l),
 	.sample_gus_r        (sample_gus_r),
-	.gus_enable          (status[51]),   // OSD "Gravis UltraSound" (oJ)
+	.gus_enable          (status[117]),  // OSD "Gravis UltraSound" (O[117])
 	.sound_fm_mode       (~status[57]),
 	.sound_cms_en        (1'b0),
 	.speaker_out         (speaker_out),
@@ -1177,9 +1177,9 @@ vga_tv15 #(.CLK_RATE(CLOCK_RATE_HZ)) vga_tv15
 	.clk                (clk_sys),
 	.reset              (reset_sync_r[2]),
 	.enable             (tv15_en),
-	.hpos               (status[16:14]),
-	.vpos               (status[28:26]),
-	.ilace_en           (status[24]),
+	.hpos               (status[124:122]),
+	.vpos               (status[120:118]),
+	.ilace_en           (status[121]),
 	.doublescan         (vga_doublescan),
 	.ilace_active       (tv_ilace),
 	.ce                 (core_ce_pixel),
