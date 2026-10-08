@@ -1322,7 +1322,7 @@ int main(int argc, char** argv) {
 	bool opl3_mode = true;
 	bool opl_mode_explicit = false;
 	bool variable_vsync = false;
-	bool vga_border = true;
+	bool vga_border = false;   // OSD "Border" defaults to No, as on the board
 	bool vga_border_explicit = false;
 	unsigned control_port = 0;
 	string control_bind = "127.0.0.1";
@@ -1799,7 +1799,7 @@ int main(int argc, char** argv) {
 	tb.status = (uint64_t{cpu_speed_status} << 8) |
 	            (uint64_t{ram_size_code} << 61) |
 	            (uint64_t{variable_vsync} << 4) |
-	            (uint64_t{!vga_border} << 54) |
+	            (uint64_t{vga_border} << 54) |
 	            (uint64_t{!opl3_mode} << 57);
 	tb.ioctl_download = 0;
 	tb.ioctl_index = 0;
@@ -2534,7 +2534,7 @@ int main(int argc, char** argv) {
 		tb.status |= uint64_t{1} << 4;
 	if (vga_border_explicit)
 		tb.status = (tb.status & ~(uint64_t{1} << 54)) |
-		            (uint64_t{!vga_border} << 54);
+		            (uint64_t{vga_border} << 54);
 	tb.eval();
 
 	auto process_control_commands = [&]() {

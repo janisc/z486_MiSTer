@@ -128,7 +128,7 @@ localparam CONF_STR = {
 	"P1O5,16/24bit mode,BGR,RGB;",
 	"P1O6,16bit format,1555,565;",
 	"P1oDE,Scale,Normal,V-Integer,Narrower HV-Integer,Wider HV-Integer;",
-	"P1oM,Border,Yes,No;",
+	"P1oM,Border,No,Yes;",
 	"P1-;",
 	"P1oP,FM mode,OPL3,OPL2 compatibility;",
 	"P1OIJ,PC Speaker Volume,1,2,3,4;",
@@ -803,7 +803,7 @@ system #(
 	.video_g             (core_g),
 	.video_b             (core_b),
 	.video_f60           (video_f60),
-	.video_border        (~status[54]),  // OSD "Border" (oM), shown by default
+	.video_border        (status[54]),   // OSD "Border" (oM), hidden by default as on ao486
 	.video_scanline_req  (1'b0),
 	.video_scanline_ready(),
 	.video_scanline_frame_start(1'b0),

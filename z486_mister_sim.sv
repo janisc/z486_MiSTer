@@ -621,7 +621,7 @@ system #(
 	.video_g             (video_g_w),
 	.video_b             (video_b_w),
 	.video_f60           (~status[4]),
-	.video_border        (~status[54]),
+	.video_border        (status[54]),
 	.video_scanline_req  (1'b0),
 	.video_scanline_ready(),
 	.video_scanline_frame_start(1'b0),
