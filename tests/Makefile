@@ -3,14 +3,16 @@ OBJ_DIR := obj_dir
 
 .PHONY: test clean
 
-test: $(OBJ_DIR)/Vtb_iobus_adapter $(OBJ_DIR)/Vtb_pit_io $(OBJ_DIR)/Vtb_rtc_ram_size $(OBJ_DIR)/Vtb_sdram_size $(OBJ_DIR)/Vtb_main_memory_svga $(OBJ_DIR)/Vtb_vga_fb_dimensions $(OBJ_DIR)/Vtb_vga_ondemand_mode13 $(OBJ_DIR)/Vtb_vga_plane_ram $(OBJ_DIR)/Vtb_mt32pi
+test: $(OBJ_DIR)/Vtb_iobus_adapter $(OBJ_DIR)/Vtb_pit_io $(OBJ_DIR)/Vtb_rtc_ram_size $(OBJ_DIR)/Vtb_sdram_size $(OBJ_DIR)/Vtb_sdram_partial $(OBJ_DIR)/Vtb_main_memory_svga $(OBJ_DIR)/Vtb_vga_fb_dimensions $(OBJ_DIR)/Vtb_vga_ondemand_mode13 $(OBJ_DIR)/Vtb_vga_dword_write $(OBJ_DIR)/Vtb_vga_plane_ram $(OBJ_DIR)/Vtb_mt32pi
 	./$(OBJ_DIR)/Vtb_iobus_adapter
 	./$(OBJ_DIR)/Vtb_pit_io
 	./$(OBJ_DIR)/Vtb_rtc_ram_size
 	./$(OBJ_DIR)/Vtb_sdram_size
+	./$(OBJ_DIR)/Vtb_sdram_partial
 	./$(OBJ_DIR)/Vtb_main_memory_svga
 	./$(OBJ_DIR)/Vtb_vga_fb_dimensions
 	./$(OBJ_DIR)/Vtb_vga_ondemand_mode13
+	./$(OBJ_DIR)/Vtb_vga_dword_write
 	./$(OBJ_DIR)/Vtb_vga_plane_ram
 	./$(OBJ_DIR)/Vtb_mt32pi
 
@@ -21,6 +23,10 @@ $(OBJ_DIR)/Vtb_mt32pi: tb_mt32pi.sv ../sys/mt32pi.sv | $(OBJ_DIR)
 $(OBJ_DIR)/Vtb_vga_fb_dimensions: tb_vga_fb_dimensions.sv ../src/soc/vga.v ../src/common/dpram.v | $(OBJ_DIR)
 	$(VERILATOR) --binary --timing -Wno-fatal --Mdir $(OBJ_DIR)/vga_fb_dimensions \
 		--top-module tb_vga_fb_dimensions $^ -o ../Vtb_vga_fb_dimensions
+
+$(OBJ_DIR)/Vtb_vga_dword_write: tb_vga_dword_write.sv ../src/soc/vga.v ../src/common/dpram.v | $(OBJ_DIR)
+	$(VERILATOR) --binary --timing -Wno-fatal --Mdir $(OBJ_DIR)/vga_dword_write \
+		--top-module tb_vga_dword_write $^ -o ../Vtb_vga_dword_write
 
 $(OBJ_DIR)/Vtb_vga_ondemand_mode13: tb_vga_ondemand_mode13.sv ../src/soc/vga.v ../src/common/dpram.v | $(OBJ_DIR)
 	$(VERILATOR) --binary --timing -Wno-fatal --Mdir $(OBJ_DIR)/vga_ondemand_mode13 \
@@ -48,6 +54,10 @@ $(OBJ_DIR)/Vtb_iobus_adapter: tb_iobus_adapter.sv ../src/iobus_adapter.sv | $(OB
 $(OBJ_DIR)/Vtb_rtc_ram_size: tb_rtc_ram_size.sv ../src/soc/rtc.v ../src/common/simple_ram.v | $(OBJ_DIR)
 	$(VERILATOR) --binary --timing -Wno-fatal --Mdir $(OBJ_DIR) \
 		--top-module tb_rtc_ram_size $^ -o Vtb_rtc_ram_size
+
+$(OBJ_DIR)/Vtb_sdram_partial: tb_sdram_partial.sv ../src/memory/sdram.v | $(OBJ_DIR)
+	$(VERILATOR) --binary --timing -Wno-fatal --Mdir $(OBJ_DIR)/sdram_partial \
+		--top-module tb_sdram_partial $^ -o ../Vtb_sdram_partial
 
 $(OBJ_DIR)/Vtb_sdram_size: tb_sdram_size.sv ../src/memory/sdram.v | $(OBJ_DIR)
 	$(VERILATOR) --binary --timing -Wno-fatal --Mdir $(OBJ_DIR)/sdram \
