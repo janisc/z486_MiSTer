@@ -380,6 +380,7 @@ wire guest_mem_busy;
 wire [31:0] guest_mem0_addr, guest_mem0_din, guest_mem0_dout;
 wire  [3:0] guest_mem0_be;
 wire  [7:0] guest_mem0_burstcount;
+wire guest_mem0_line_read;
 wire guest_mem0_resp_valid, guest_mem0_ready, guest_mem0_valid, guest_mem0_write;
 wire [31:0] guest_mem1_addr, guest_mem1_din, guest_mem1_dout;
 wire  [3:0] guest_mem1_be;
@@ -441,6 +442,7 @@ split_sdram_backend #(
 	.mem0_din(guest_mem0_din), .mem0_dout(guest_mem0_dout),
 	.mem0_resp_valid(guest_mem0_resp_valid), .mem0_be(guest_mem0_be),
 	.mem0_burstcount(guest_mem0_burstcount),
+	.mem0_wrap(guest_mem0_line_read),
 	.mem1_valid(guest_mem1_valid), .mem1_ready(guest_mem1_ready),
 	.mem1_write(guest_mem1_write), .mem1_addr(guest_mem1_addr),
 	.mem1_din(guest_mem1_din), .mem1_dout(guest_mem1_dout),
@@ -456,6 +458,11 @@ split_sdram_backend #(
 system #(
 	.SYS_FREQ(CLOCK_RATE_HZ),
 	.DCACHE_SET_BITS(7),   // DEBUG: reproduce 8KB doom crash
+`ifdef Z486_WB_SIM
+	.DCACHE_LINE_WRAP(1'b0), // whole aligned lines
+`else
+	.DCACHE_LINE_WRAP(1'b1), // as z486_mister.sv: the SDRAM backend wraps line reads
+`endif
 	.ICACHE_SET_BITS(7),
 	.ENABLE_X87(ENABLE_X87),
 	.ENABLE_CMS(1'b0),
@@ -494,7 +501,7 @@ system #(
 `else
 	.ext_mem0_line_dout  (128'd0),
 	.ext_mem0_line_resp_valid(1'b0),
-	.ext_mem0_line_read  (),
+	.ext_mem0_line_read  (guest_mem0_line_read),
 `endif
 	.ext_mem0_be         (guest_mem0_be),
 	.ext_mem0_burstcount (guest_mem0_burstcount),

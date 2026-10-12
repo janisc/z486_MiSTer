@@ -233,6 +233,10 @@ module system (
 
 parameter SYS_FREQ = 50_000_000;
 parameter DCACHE_SET_BITS = 8;   // dcache size: 8 = 16KB, 7 = 8KB
+// 1: the memory returns a cache-line read (ext_mem0_line_read) in wrapping
+// order from the requested dword, so D-cache fills ask for the missing dword
+// first (critical word first).
+parameter DCACHE_LINE_WRAP = 1'b0;
 parameter ICACHE_SET_BITS = 8;   // icache size: 8 = 16KB, 7 = 8KB
 parameter ENABLE_X87 = 1'b0;
 parameter ENABLE_CMS = 1'b1;
@@ -470,6 +474,9 @@ wire  [7:0] vga_readdata;
 wire  [7:0] vga_writedata;
 wire        vga_read;
 wire        vga_write;
+wire        vga_write_dword;      // chain-4 dword in one cycle
+wire [31:0] vga_writedata_dword;
+wire        vga_dword_write_ok;
 wire  [2:0] vga_memmode;
 wire  [5:0] video_wr_seg;
 wire  [5:0] video_rd_seg;
@@ -489,6 +496,7 @@ wire        cpu_triple_fault_reset;
 z486 #(
     .PROTECT_UMA_ROM(1),
     .DCACHE_SET_BITS(DCACHE_SET_BITS),
+    .DCACHE_LINE_WRAP(DCACHE_LINE_WRAP),
     .ICACHE_SET_BITS(ICACHE_SET_BITS),
     .ENABLE_X87(ENABLE_X87),
     .ENABLE_DEVICE_MMIO(ENABLE_VOODOO),
@@ -705,6 +713,9 @@ main_memory main_memory (
 	.vga_writedata     (vga_writedata),
 	.vga_read          (vga_read),
 	.vga_write         (vga_write),
+	.vga_write_dword   (vga_write_dword),
+	.vga_writedata_dword(vga_writedata_dword),
+	.vga_dword_write_ok(vga_dword_write_ok),
 	.vga_memmode       (vga_memmode),
 	.vga_wr_seg        (video_wr_seg),
 	.vga_rd_seg        (video_rd_seg),
@@ -1321,6 +1332,9 @@ vga #(
 	.mem_readdata      (vga_readdata),
 	.mem_write         (vga_write),
 	.mem_writedata     (vga_writedata),
+	.mem_write_dword   (vga_write_dword),
+	.mem_writedata_dword(vga_writedata_dword),
+	.mem_dword_write_ok(vga_dword_write_ok),
 
 	.irq               (irq_2),
 	.vga_ce            (video_ce),

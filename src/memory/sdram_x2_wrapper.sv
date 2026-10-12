@@ -107,7 +107,7 @@ sdram #(.FREQ(FREQ_2X)) u_sdram (
     .dout0       (core_dout0),
     .be0         (be0),
     .resp_valid0 (core_resp_valid0),
-    .burst_cnt0  (burst_cnt0),
+    .burst_cnt0  (burst_cnt0), .burst_wrap0(1'b0),
     .burst_done0 (core_bdone0),
 
     .valid1      (valid1),
@@ -118,7 +118,7 @@ sdram #(.FREQ(FREQ_2X)) u_sdram (
     .dout1       (core_dout1),
     .be1         (be1),
     .resp_valid1 (core_resp_valid1),
-    .burst_cnt1  (burst_cnt1),
+    .burst_cnt1  (burst_cnt1), .burst_wrap1(1'b0),
     .burst_done1 (core_bdone1),
 
     .valid2      (valid2),
@@ -129,7 +129,7 @@ sdram #(.FREQ(FREQ_2X)) u_sdram (
     .dout2       (core_dout2),
     .be2         (be2),
     .resp_valid2 (core_resp_valid2),
-    .burst_cnt2  (burst_cnt2),
+    .burst_cnt2  (burst_cnt2), .burst_wrap2(1'b0),
     .burst_done2 (core_bdone2)
 );
 

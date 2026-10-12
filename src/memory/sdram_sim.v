@@ -40,6 +40,7 @@ module sdram
     input       [3:0] be0,          // byte enable
     output reg        resp_valid0,  // read data ready
     input       [3:0] burst_cnt0,   // burst count for reads (max 15 - 60 bytes)
+    input             burst_wrap0,  // 4-dword line read: wrap from the requested dword
     output reg        burst_done0,  // burst done signal
 
     // Port 1
@@ -52,6 +53,7 @@ module sdram
     input       [3:0] be1,
     output reg        resp_valid1,
     input       [3:0] burst_cnt1,
+    input             burst_wrap1,
     output reg        burst_done1,
 
     // Port 2
@@ -64,6 +66,7 @@ module sdram
     input       [3:0] be2,
     output reg        resp_valid2,
     input       [3:0] burst_cnt2,
+    input             burst_wrap2,
     output reg        burst_done2
 );
 
@@ -97,6 +100,7 @@ localparam CAS0 = 2;
 localparam CAS1 = 3;
 
 reg [26:1] addr;
+reg wrap;                      // 4-dword line read wraps within its line
 reg [31:0] din;
 reg wr;
 reg [3:0] be;
@@ -110,14 +114,20 @@ assign ready0 = ready_pulse[0];
 assign ready1 = ready_pulse[1];
 assign ready2 = ready_pulse[2];
 
+// Next dword of a burst: a wrapping line read stays within its 16 bytes.
+function [26:0] next_dword(input [26:0] a, input w);
+    next_dword = w ? {a[26:4], a[3:2] + 2'd1, 2'b00} : a + 27'd4;
+endfunction
+
 // Fast-mode burst state: one active burst at a time
 reg        fast_burst_active = 0;
+reg        fast_burst_wrap;
 reg [26:0] fast_burst_addr;
 reg [3:0]  fast_burst_rem;   // remaining DWORDs (including current)
 reg [1:0]  fast_burst_port;
 
 // Fast-mode helper: start a read (burst or single)
-task fast_read(input [26:0] a, input [3:0] bcnt, input [1:0] p);
+task fast_read(input [26:0] a, input [3:0] bcnt, input [1:0] p, input w);
 begin
     if (p == 0) begin
         dout0 <= {mem[{a[26:2],1'b1}], mem[{a[26:2],1'b0}]};
@@ -135,7 +145,8 @@ begin
     ready_pulse[p] <= 1;
     if (bcnt > 1) begin
         fast_burst_active <= 1;
-        fast_burst_addr <= a + 4;  // next DWORD (byte address +4)
+        fast_burst_addr <= next_dword(a, w);
+        fast_burst_wrap <= w;
         fast_burst_rem <= bcnt - 1;
         fast_burst_port <= p;
     end
@@ -182,7 +193,7 @@ always @(posedge clk) begin
                 resp_valid2 <= 1;
                 burst_done2 <= (fast_burst_rem <= 1);
             end
-            fast_burst_addr <= fast_burst_addr + 4;
+            fast_burst_addr <= next_dword(fast_burst_addr, fast_burst_wrap);
             fast_burst_rem <= fast_burst_rem - 1;
             if (fast_burst_rem <= 1)
                 fast_burst_active <= 0;
@@ -191,15 +202,15 @@ always @(posedge clk) begin
         if (!fast_burst_active) begin
             if (valid0) begin
                 if (wr0) fast_write(addr0, din0, be0, 2'd0);
-                else     fast_read(addr0, burst_cnt0, 2'd0);
+                else     fast_read(addr0, burst_cnt0, 2'd0, burst_wrap0 && (burst_cnt0 == 4'd4));
             end
             if (valid1) begin
                 if (wr1) fast_write(addr1, din1, be1, 2'd1);
-                else     fast_read(addr1, burst_cnt1, 2'd1);
+                else     fast_read(addr1, burst_cnt1, 2'd1, burst_wrap1 && (burst_cnt1 == 4'd4));
             end
             if (valid2) begin
                 if (wr2) fast_write(addr2, din2, be2, 2'd2);
-                else     fast_read(addr2, burst_cnt2, 2'd2);
+                else     fast_read(addr2, burst_cnt2, 2'd2, burst_wrap2 && (burst_cnt2 == 4'd4));
             end
         end
     end else begin
@@ -212,6 +223,7 @@ always @(posedge clk) begin
             wr <= wr0;
             be <= be0;
             burst_cnt <= burst_cnt0;
+            wrap <= burst_wrap0 && (burst_cnt0 == 4'd4);
             port <= 0;
             busy_buf <= 1;
             ready_pulse[0] <= 1;
@@ -222,6 +234,7 @@ always @(posedge clk) begin
             wr <= wr1;
             be <= be1;
             burst_cnt <= burst_cnt1;
+            wrap <= burst_wrap1 && (burst_cnt1 == 4'd4);
             port <= 1;
             busy_buf <= 1;
             ready_pulse[1] <= 1;
@@ -231,6 +244,7 @@ always @(posedge clk) begin
             din <= din2;
             wr <= wr2;
             be <= be2;
+            wrap <= 1'b0;
             port <= 2;
             busy_buf <= 1;
             ready_pulse[2] <= 1;
@@ -276,7 +290,7 @@ always @(posedge clk) begin
                 if (hi && burst_cnt <= 1) burst_done2 <= 1;
             end
         end
-        addr <= addr + 1;
+        addr <= (hi && wrap) ? {addr[26:4], addr[3:2] + 2'd1, 1'b0} : addr + 1;
         if (hi) begin
             if (burst_cnt <= 1 || wr) begin  // all done
                 state <= IDLE;

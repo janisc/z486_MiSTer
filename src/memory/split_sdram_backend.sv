@@ -22,6 +22,7 @@ module split_sdram_backend #(
     output        mem0_resp_valid,
     input   [3:0] mem0_be,
     input   [7:0] mem0_burstcount,
+    input         mem0_wrap,      // line read: dwords wrap from the requested one
 
     input         mem1_valid,
     output        mem1_ready,
@@ -68,6 +69,7 @@ sdram #(
     .resp_valid0(mem0_resp_valid),
     .be0(mem0_be),
     .burst_cnt0(mem0_burstcount[3:0]),
+    .burst_wrap0(mem0_wrap),
     .burst_done0(),
 
     .valid1(mem1_valid),
@@ -79,6 +81,7 @@ sdram #(
     .resp_valid1(mem1_resp_valid),
     .be1(mem1_be),
     .burst_cnt1(mem1_burstcount[3:0]),
+    .burst_wrap1(1'b0),
     .burst_done1(),
 
     .valid2(1'b0),
@@ -90,6 +93,7 @@ sdram #(
     .resp_valid2(),
     .be2(4'd0),
     .burst_cnt2(4'd0),
+    .burst_wrap2(1'b0),
     .burst_done2(),
 
     .SDRAM_DQ(sdram_dq),
