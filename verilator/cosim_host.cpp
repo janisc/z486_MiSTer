@@ -40,6 +40,9 @@ bool g_have_cur = false;        // z486 issued an instruction the reference has 
 bool g_squash_ok = false;       // the last step faulted: one younger issue may be squashed
 bool g_ram_copied = true;        // the reference has z486's RAM since the last reset
 bool g_snap_candidate = false;  // this clock issued an instruction with no other transfer
+bool g_x87_on = true;           // the reference's x87 follows z486's (cosim_set_fpu)
+bool g_rpti_prev = false;
+bool g_cur_restarted = false;   // z486 cut the pending instruction with RPTI
 uint32_t g_arch[COSIM_ARCH_WORDS];
 std::deque<IssueEv> g_issues;
 std::deque<ReadReq> g_reads;
@@ -111,9 +114,89 @@ bool check_registers(const IssueEv& ev) {
     return true;
 }
 
+// The x87's architectural state (control, status with TOP, tags and the
+// non-empty registers) against the reference's, at an issue where z486's x87
+// is idle: its state then covers every ESC instruction before this one, as
+// the reference's does. Checked when the reference's state changed since the
+// last match, and every kX87Period issues; a difference must persist over
+// kX87Persist idle checks. COSIM_X87_VALUES=0 leaves the register values and
+// C1 out (z486's x87 is not fully IEEE-compliant).
+constexpr unsigned kX87Persist = 4;
+constexpr unsigned kX87Period = 4096;
+uint64_t g_now = 0;
+uint32_t g_x87_ref_last[27];
+bool g_x87_dirty = false;
+unsigned g_x87_miss = 0, g_x87_period = 0;
+bool g_x87_values = true;
+uint64_t g_x87_checks = 0;
+
+void print_x87(const char* who, const uint32_t* w) {
+    printf("  %s: CW %04x SW %04x (TOP %u) TW %04x\n", who, w[0] & 0xFFFF, w[1] & 0xFFFF,
+           (w[1] >> 11) & 7, w[2] & 0xFFFF);
+    for (int i = 0; i < 8; i++) {
+        if (((w[2] >> (2 * i)) & 3) == 3) continue;
+        printf("    R%d %04x %08x%08x\n", i, w[5 + 3 * i] & 0xFFFF, w[4 + 3 * i], w[3 + 3 * i]);
+    }
+}
+
+bool check_x87(const IssueEv& ev) {
+#if SIM_ENABLE_X87
+    if (!g_x87_on) return true;
+    uint32_t arch[COSIM_ARCH_WORDS];
+    cosim_arch(arch);
+    const uint32_t* ref = arch + COSIM_ARCH_X87;
+    if (memcmp(ref, g_x87_ref_last, sizeof(g_x87_ref_last)) != 0) {
+        memcpy(g_x87_ref_last, ref, sizeof(g_x87_ref_last));
+        g_x87_dirty = true;
+    }
+    if (!g_x87_dirty && ++g_x87_period < kX87Period) return true;
+    g_x87_period = 0;
+    if (ev.t != g_now) return true;     // checked a cycle late: z486 has moved on
+    static svScope unit = svGetScopeFromName("TOP.z486_mister_sim.system_i.z486_cpu.x87");
+    static svScope ctl = svGetScopeFromName("TOP.z486_mister_sim.system_i.z486_cpu.x87.gen_x87.control");
+    if (!unit || !ctl) return true;
+    svSetScope(unit);
+    if (!cosim_x87_idle()) return true;
+    uint32_t dut[27];
+    svSetScope(ctl);
+    for (int i = 0; i < 27; i++) dut[i] = (uint32_t)cosim_x87_word(i);
+    g_x87_checks++;
+    // Without values, C1 (rounded up) goes too: it follows the rounding.
+    const uint32_t sw_mask = g_x87_values ? 0xFFFF : 0xFDFF;
+    bool same = (dut[0] & 0xFFFF) == (ref[0] & 0xFFFF) && (dut[1] & sw_mask) == (ref[1] & sw_mask) &&
+                (dut[2] & 0xFFFF) == (ref[2] & 0xFFFF);
+    for (int i = 0; same && g_x87_values && i < 8; i++) {
+        if (((ref[2] >> (2 * i)) & 3) == 3) continue;
+        same = dut[3 + 3 * i] == ref[3 + 3 * i] && dut[4 + 3 * i] == ref[4 + 3 * i] &&
+               (dut[5 + 3 * i] & 0xFFFF) == (ref[5 + 3 * i] & 0xFFFF);
+    }
+    if (same) {
+        g_x87_dirty = false;
+        g_x87_miss = 0;
+        return true;
+    }
+    if (++g_x87_miss < kX87Persist) return true;
+    diverge("x87 state differs", ev.t);
+    print_x87("z486     ", dut);
+    print_x87("reference", ref);
+    return false;
+#else
+    (void)ev;
+    return true;
+#endif
+}
+
 bool process_issues() {
     while (!g_issues.empty()) {
         const IssueEv ev = g_issues.front();
+        if (g_have_cur && g_cur_restarted && !cosim_at_rep_string()) {
+            // z486 took an interrupt inside the instruction (RPTI: WAIT or an
+            // ESC waiting for the busy x87) and restarts it after the handler;
+            // the reference, whose x87 never runs long, does not run it now.
+            g_have_cur = false;
+            g_cur_restarted = false;
+            g_squash_ok = false;
+        }
         if (g_have_cur) {
             // An IRQ acknowledged since this instruction issued may have cut a
             // REP string short: z486's count at the handler says where.
@@ -128,6 +211,7 @@ bool process_issues() {
                 return false;
             }
             g_have_cur = false;
+            g_cur_restarted = false;
             g_squash_ok = cosim_last_fault() >= 0;
             cosim_adopt_flags(ev.eflags);
         }
@@ -167,6 +251,7 @@ bool process_issues() {
         g_squash_ok = false;
         g_have_cur = true;
         if (!check_registers(ev)) return false;
+        if (!check_x87(ev)) return false;
         g_issues.pop_front();
     }
     return true;
@@ -178,6 +263,8 @@ void cosim_host_enable(Vz486_mister_sim* tb, unsigned ram_mb) {
     g_tb = tb;
     g_ram_mb = ram_mb;
     g_trace = getenv("COSIM_TRACE") != nullptr;
+    if (const char* v = getenv("COSIM_X87_VALUES")) g_x87_values = atoi(v) != 0;
+    cosim_set_x87_lenient(!g_x87_values);
     cosim_init(ram_mb << 20);
     printf("cosim: 86Box reference, %u MB, checking issue EIPs and memory/I/O writes\n", ram_mb);
 }
@@ -186,8 +273,14 @@ bool cosim_host_cycle(uint64_t t) {
     if (!g_tb || g_failed) return !g_failed;
     Vz486_mister_sim& tb = *g_tb;
     g_cycles++;
+    g_now = t;
     if (tb.cosim_issue) g_issue_raw++;
     if (!tb.cosim_cpu_reset_n) g_reset_cycles++;
+    if (bool(tb.cosim_x87_on) != g_x87_on) {
+        g_x87_on = tb.cosim_x87_on;
+        cosim_set_fpu(g_x87_on);
+        printf("cosim: reference x87 %s\n", g_x87_on ? "on" : "off");
+    }
 
     if (!tb.cosim_cpu_reset_n) {
         if (g_running) g_resets++;
@@ -287,6 +380,8 @@ bool cosim_host_cycle(uint64_t t) {
         }
     }
 
+    if (tb.cosim_rpti && !g_rpti_prev && g_have_cur) g_cur_restarted = true;
+    g_rpti_prev = tb.cosim_rpti;
     if (tb.cosim_issue) {
         if (!g_ram_copied) {
             copy_ram();
@@ -313,6 +408,12 @@ void cosim_host_report() {
            (unsigned long long)cosim_instructions(), (unsigned long long)g_irqs,
            (unsigned long long)g_squashed, (unsigned long long)g_stalls,
            (unsigned long long)g_resets);
+    if (g_x87_checks)
+        printf("cosim: x87 state checked at %llu idle issues%s\n", (unsigned long long)g_x87_checks,
+               g_x87_values ? "" : " (values not compared)");
+    if (cosim_x87_adopted())
+        printf("cosim: %llu x87 store bytes differed and were adopted from z486\n",
+               (unsigned long long)cosim_x87_adopted());
     if (g_snap_polls)
         printf("cosim: snapshot polls %llu, candidates %llu, bus quiet %llu, idle %llu\n",
                (unsigned long long)g_snap_polls, (unsigned long long)g_snap_cand,
@@ -536,6 +637,16 @@ bool cosim_host_load_portable(const std::string& dir) {
     cosim_arch(g_arch);
     svSetScope(svGetScopeFromName("TOP.z486_mister_sim"));
     cosim_load_arch();
+#if SIM_ENABLE_X87
+    // The x87 state (x87_control.sv cosim_load_x87).
+    if (svScope x87 = svGetScopeFromName("TOP.z486_mister_sim.system_i.z486_cpu.x87.gen_x87.control")) {
+        const uint32_t* x = g_arch + COSIM_ARCH_X87;
+        svSetScope(x87);
+        cosim_load_x87(x[0], x[1], x[2], -1, 0, 0, 0);
+        for (int i = 0; i < 8; i++)
+            cosim_load_x87(0, 0, 0, i, x[3 + 3 * i], x[4 + 3 * i], x[5 + 3 * i]);
+    }
+#endif
     printf("cosim: z486 restored at %04x:%08x (CR0 %08x CR3 %08x EFLAGS %08x)\n", g_arch[22], g_arch[8],
            g_arch[10], g_arch[12], g_arch[9]);
     return true;

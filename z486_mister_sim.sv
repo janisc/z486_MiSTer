@@ -130,6 +130,8 @@ module z486_mister_sim (
 	output [31:0] cosim_ecx,
 	output [31:0] cosim_eflags,
 	output        cosim_a20,
+	output        cosim_x87_on,      // z486's x87 is on (ENABLE_X87, not +z486_x87_off)
+	output        cosim_rpti,        // microcode RPTI: the instruction restarts after an interrupt
 	output        cosim_dreq_acc,
 	output        cosim_dreq_write,
 	output [31:0] cosim_dreq_addr,
@@ -157,6 +159,9 @@ parameter ENABLE_X87 = 1'b1;
 
 wire        software_reset;
 reg  [7:0]  software_reset_count;
+// +z486_x87_off acts as the OSD switch: no x87, and CMOS reports no FPU.
+reg         sim_x87_off = 1'b0;
+initial sim_x87_off = $test$plusargs("z486_x87_off");
 wire        core_reset = reset | (software_reset_count != 8'd0);
 assign soft_reset_req = software_reset;
 
@@ -380,6 +385,7 @@ wire guest_mem_busy;
 wire [31:0] guest_mem0_addr, guest_mem0_din, guest_mem0_dout;
 wire  [3:0] guest_mem0_be;
 wire  [7:0] guest_mem0_burstcount;
+wire guest_mem0_line_read;
 wire guest_mem0_resp_valid, guest_mem0_ready, guest_mem0_valid, guest_mem0_write;
 wire [31:0] guest_mem1_addr, guest_mem1_din, guest_mem1_dout;
 wire  [3:0] guest_mem1_be;
@@ -441,6 +447,7 @@ split_sdram_backend #(
 	.mem0_din(guest_mem0_din), .mem0_dout(guest_mem0_dout),
 	.mem0_resp_valid(guest_mem0_resp_valid), .mem0_be(guest_mem0_be),
 	.mem0_burstcount(guest_mem0_burstcount),
+	.mem0_wrap(guest_mem0_line_read),
 	.mem1_valid(guest_mem1_valid), .mem1_ready(guest_mem1_ready),
 	.mem1_write(guest_mem1_write), .mem1_addr(guest_mem1_addr),
 	.mem1_din(guest_mem1_din), .mem1_dout(guest_mem1_dout),
@@ -456,6 +463,11 @@ split_sdram_backend #(
 system #(
 	.SYS_FREQ(CLOCK_RATE_HZ),
 	.DCACHE_SET_BITS(7),   // DEBUG: reproduce 8KB doom crash
+`ifdef Z486_WB_SIM
+	.DCACHE_LINE_WRAP(1'b0), // whole aligned lines
+`else
+	.DCACHE_LINE_WRAP(1'b1), // as z486_mister.sv: the SDRAM backend wraps line reads
+`endif
 	.ICACHE_SET_BITS(7),
 	.ENABLE_X87(ENABLE_X87),
 	.ENABLE_CMS(1'b0),
@@ -494,7 +506,7 @@ system #(
 `else
 	.ext_mem0_line_dout  (128'd0),
 	.ext_mem0_line_resp_valid(1'b0),
-	.ext_mem0_line_read  (),
+	.ext_mem0_line_read  (guest_mem0_line_read),
 `endif
 	.ext_mem0_be         (guest_mem0_be),
 	.ext_mem0_burstcount (guest_mem0_burstcount),
@@ -610,7 +622,7 @@ system #(
 	.cpu_speed_osd      (cpu_speed_osd),
 	.fast_off           (1'b0),          // sim: +z486_fast_off / +z486_fast_toggle=N
 	.cache_off          (1'b0),          // sim: +z486_cache_off / +z486_cache_toggle=N
-	.x87_off            (1'b0),          // sim: +z486_x87_off
+	.x87_off            (sim_x87_off),   // +z486_x87_off, as the OSD switch
 	.syscfg              (syscfg),
 
 	.video_ce            (video_ce),
@@ -621,7 +633,7 @@ system #(
 	.video_g             (video_g_w),
 	.video_b             (video_b_w),
 	.video_f60           (~status[4]),
-	.video_border        (~status[54]),
+	.video_border        (status[54]),
 	.video_fb_native     (1'b0),
 	.gus_enable          (1'b0),
 	.video_scanline_req  (1'b0),
@@ -1014,6 +1026,8 @@ assign cosim_issue_eip        = system_i.z486_cpu.EIP;
 assign cosim_ecx              = system_i.z486_cpu.data_unit_inst.gpr_capture_view[1];
 assign cosim_eflags           = system_i.z486_cpu.eflags_fwd;
 assign cosim_a20              = system_i.z486_cpu.a20_enable;
+assign cosim_x87_on           = !system_i.z486_cpu.x87_off;
+assign cosim_rpti             = system_i.z486_cpu.uc_addr == 12'h208;  // RPTI
 assign cosim_dreq_acc         = system_i.z486_cpu.dcache_req_valid && system_i.z486_cpu.dcache_req_accepted;
 assign cosim_dreq_write       = system_i.z486_cpu.dcache_req_write;
 assign cosim_dreq_addr        = system_i.z486_cpu.dcache_req_phys_addr_raw;

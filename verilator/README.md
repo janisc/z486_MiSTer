@@ -144,9 +144,12 @@ registers; z486 supplies I/O and A0000-BFFFF read data, interrupt vectors, DMA
 writes and page-walk A/D updates, so peripheral bugs show as hangs, not
 divergences.
 
+The reference includes the x87 (86Box's softfloat FPU); `+z486_x87_off` turns
+it off in z486 and the reference together.
+
 ```sh
-make no_x87
-./obj_dir_no_x87/Vz486_mister_sim --headless --cosim --no-audio-clock \
+make
+./obj_dir/Vz486_mister_sim --headless --cosim --no-audio-clock \
   --ram-mb 64 --disk win95.vhd \
   --snapshot-dir /data/snap/run1 --snapshot-keep 200 \
   --screenshot-dir /tmp/shots --screenshot-interval 20000000 \
@@ -154,7 +157,13 @@ make no_x87
 ```
 
 On a divergence the run prints the reference's last instructions
-(`COSIM_HIST=n` for up to 64), its unmatched writes and z486's last writes.
+(`COSIM_HIST=n` for up to 64; each line ends with EFLAGS), its unmatched
+writes and z486's last writes. `COSIM_FLAGWATCH=mask` logs every change of
+the masked EFLAGS bits in the reference (e.g. `0x4000` for NT), and
+`COSIM_PEEK=lin[,lin...]` adds the reference's segment registers and its page
+walk and bytes for those linear addresses to the report. `COSIM_WWATCH=phys`
+logs every reference write to that dword and `COSIM_RLIN=lin` every reference
+translation of that linear dword, with the instruction number.
 `COSIM_TRACE=1` logs interrupts and I/O/device reads. To get an FST trace of
 the divergence, restore the last snapshot before it (`snap_<cycle>`, at sim
 time 2 × cycle) with the same arguments and `--end` a little past
@@ -191,7 +200,7 @@ sectors that differ from the image. Snapshots restore into builds with
 changed CPU RTL:
 
 ```sh
-./obj_dir_no_x87/Vz486_mister_sim --headless --cosim --no-audio-clock --ram-mb 64 \
+./obj_dir/Vz486_mister_sim --headless --cosim --no-audio-clock --ram-mb 64 \
   --disk /data/c.vhd --cdrom /data/cd.iso \
   --restore-snapshot /data/snap/run1/snap_0000004800648979 \
   --trace --trace-start 9601300000 --trace-file /tmp/x.fst --end 9602000000

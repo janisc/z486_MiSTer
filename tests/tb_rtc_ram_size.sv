@@ -10,6 +10,7 @@ module tb_rtc_ram_size;
     logic [7:0] io_writedata = 0;
     logic [7:0] io_readdata;
     logic [7:0] io_readdata_no_fpu;
+    logic [7:0] io_readdata_fpu_off;
     logic [7:0] mgmt_address = 0;
     logic mgmt_write = 0;
     logic [7:0] mgmt_writedata = 0;
@@ -31,6 +32,7 @@ module tb_rtc_ram_size;
         .io_writedata(io_writedata),
         .bootcfg(6'd0),
         .ram_size(ram_size),
+        .fpu_off(1'b0),
         .mgmt_address(mgmt_address),
         .mgmt_write(mgmt_write),
         .mgmt_writedata(mgmt_writedata),
@@ -48,6 +50,28 @@ module tb_rtc_ram_size;
         .io_writedata(io_writedata),
         .bootcfg(6'd0),
         .ram_size(ram_size),
+        .fpu_off(1'b0),
+        .mgmt_address(mgmt_address),
+        .mgmt_write(mgmt_write),
+        .mgmt_writedata(mgmt_writedata),
+        .clock_rate(28'd85_000_000)
+    );
+
+    // An FPU build with the x87 switched off reads back as a build without one.
+    rtc #(
+        .FPU_PRESENT(1'b1)
+    ) dut_fpu_off (
+        .clk(clk),
+        .rst_n(rst_n),
+        .irq(),
+        .io_address(io_address),
+        .io_read(io_read),
+        .io_readdata(io_readdata_fpu_off),
+        .io_write(io_write),
+        .io_writedata(io_writedata),
+        .bootcfg(6'd0),
+        .ram_size(ram_size),
+        .fpu_off(1'b1),
         .mgmt_address(mgmt_address),
         .mgmt_write(mgmt_write),
         .mgmt_writedata(mgmt_writedata),
@@ -87,6 +111,11 @@ module tb_rtc_ram_size;
             if (io_readdata_no_fpu !== expected) begin
                 $error("no-FPU CMOS %02h: expected %02h, got %02h",
                        address, expected, io_readdata_no_fpu);
+                $fatal;
+            end
+            if (io_readdata_fpu_off !== expected) begin
+                $error("x87-off CMOS %02h: expected %02h, got %02h",
+                       address, expected, io_readdata_fpu_off);
                 $fatal;
             end
         end

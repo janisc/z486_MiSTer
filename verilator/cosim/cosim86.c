@@ -12,6 +12,7 @@
  * the highest). A step that needs device data z486 has not returned yet is
  * rolled back and retried (COSIM_STALL).
  */
+#include <stddef.h>
 #include "iss_glue.h"
 #include "cosim86.h"
 
@@ -52,12 +53,21 @@ static uint32_t udf;
 /* ============================================================
  * Event queues
  * ============================================================ */
-typedef struct { uint32_t addr; uint8_t val; uint8_t done; uint8_t silent; uint64_t grp; } ev_t;
+typedef struct { uint32_t addr; uint8_t val; uint8_t done; uint8_t silent; uint8_t fpu; uint64_t grp; } ev_t;
 typedef struct { ev_t *v; size_t head, tail, cap; } q_t;
 
 static void q_push_ev(q_t *q, ev_t e);
+/* The instruction being stepped is an ESC (x87): its writes are FPU stores. */
+static int cur_fpu;
+/* COSIM_X87_VALUES=0 (cosim_set_x87_lenient): z486's x87 is not bit-exact, so
+ * an FPU store's byte that differs is adopted from z486 and logged. */
+static int x87_lenient;
+static uint64_t x87_adopted;
+/* IGNNE#, as system.sv: an OUT to port F0h sets it while an x87 error is
+ * pending; it drops with the error (FNCLEX, FNINIT). */
+static int ignne;
 static void q_push(q_t *q, uint32_t addr, uint8_t val, uint64_t grp) {
-    q_push_ev(q, (ev_t){ addr, val, 0, 0, grp });
+    q_push_ev(q, (ev_t){ .addr = addr, .val = val, .fpu = (uint8_t)cur_fpu, .grp = grp });
 }
 static void q_push_ev(q_t *q, ev_t e) {
     if (q->tail == q->cap) {
@@ -95,8 +105,12 @@ static void fail(const char *fmt, ...) {
 #define HIST 64
 typedef struct { uint64_t n; uint16_t sel; uint32_t eip; uint8_t bytes[8]; uint32_t regs[8]; } hist_t;
 static hist_t hist[HIST];
+/* EFLAGS before each history entry. Kept out of hist_t, which snapshots
+ * store raw, so existing snapshots still restore (empty after a restore). */
+static uint32_t hist_flags[HIST];
 
 static uint8_t peek_lin(uint32_t lin);
+static uint32_t walk(uint32_t lin, int write, int probe_only);
 
 static void hist_add(uint16_t sel, uint32_t eip, uint32_t lin) {
     hist_t *h = &hist[ninsn % HIST];
@@ -104,7 +118,33 @@ static void hist_add(uint16_t sel, uint32_t eip, uint32_t lin) {
     h->sel = sel;
     h->eip = eip;
     for (int i = 0; i < 8; i++) h->bytes[i] = peek_lin(lin + i);
+    cur_fpu = 0;
+    for (int i = 0; i < 8; i++) {
+        const uint8_t b = h->bytes[i];
+        if (b == 0x26 || b == 0x2E || b == 0x36 || b == 0x3E || b == 0x64 || b == 0x65 ||
+            b == 0x66 || b == 0x67 || b == 0xF0 || b == 0xF2 || b == 0xF3)
+            continue;
+        cur_fpu = (b & 0xF8) == 0xD8;
+        break;
+    }
     for (int r = 0; r < 8; r++) h->regs[r] = cpu_state.regs[r].l;
+    flags_rebuild();
+    uint32_t fl = cpu_state.flags | ((uint32_t)cpu_state.eflags << 16);
+    hist_flags[ninsn % HIST] = fl;
+    /* COSIM_FLAGWATCH=mask: log each change of the masked EFLAGS bits, with
+     * the instruction about to run (the change came from the one before). */
+    static int      watch_init;
+    static uint32_t watch_mask, watch_last;
+    if (!watch_init) {
+        const char *e = getenv("COSIM_FLAGWATCH");
+        watch_mask = e ? (uint32_t)strtoul(e, NULL, 0) : 0;
+        watch_last = fl;
+        watch_init = 1;
+    }
+    if ((fl ^ watch_last) & watch_mask)
+        printf("cosim: flagwatch #%llu %04x:%08x eflags %08x -> %08x\n",
+               (unsigned long long)ninsn, sel, eip, watch_last, fl);
+    watch_last = fl;
 }
 
 /* COSIM_HIST=n (up to the 64 kept) prints more than the last 16. */
@@ -115,7 +155,34 @@ void cosim_dump_history(void) {
     cosim_dump_history_from(ninsn > n ? ninsn - n : 0, n);
 }
 
+/* COSIM_PEEK=lin[,lin...]: the reference's page walk and RAM bytes for these
+ * linear addresses at the report (a stale z486 TLB entry shows as a
+ * different physical address from z486's access). */
+static void dump_peek(void) {
+    const char *e = getenv("COSIM_PEEK");
+    if (e) {
+        static const char *sn[6] = { "es", "cs", "ss", "ds", "fs", "gs" };
+        const x86seg *sg[6] = { &cpu_state.seg_es, &cpu_state.seg_cs, &cpu_state.seg_ss,
+                                &cpu_state.seg_ds, &cpu_state.seg_fs, &cpu_state.seg_gs };
+        printf("  segs:");
+        for (int i = 0; i < 6; i++)
+            printf(" %s=%04x/%08x/%08x", sn[i], sg[i]->seg, sg[i]->base, sg[i]->limit);
+        printf("\n");
+    }
+    while (e && *e) {
+        char    *end;
+        uint32_t lin = (uint32_t)strtoul(e, &end, 0);
+        if (end == e) break;
+        uint32_t p = walk(lin, 0, 1);
+        printf("  peek %08x -> phys %08x:", lin, p);
+        for (int i = 0; i < 4; i++) printf(" %02x", peek_lin(lin + i));
+        printf("\n");
+        e = (*end == ',') ? end + 1 : end;
+    }
+}
+
 void cosim_dump_history_from(uint64_t first, unsigned count) {
+    if (first + count >= ninsn) dump_peek();
     static const char *nm[8] = { "eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi" };
     for (uint64_t n = first; n < ninsn && n < first + count; n++) {
         hist_t *h = &hist[n % HIST];
@@ -124,7 +191,7 @@ void cosim_dump_history_from(uint64_t first, unsigned count) {
         for (int i = 0; i < 8; i++) printf("%02x ", h->bytes[i]);
         printf(" |");
         for (int r = 0; r < 8; r++) printf(" %s=%08x", nm[r], h->regs[r]);
-        printf("\n");
+        printf(" fl=%08x\n", hist_flags[n % HIST]);
     }
 }
 
@@ -184,7 +251,22 @@ fault:
     return 0;
 }
 
-static uint32_t xlate(uint32_t lin, int write) { return walk(lin, write, 0); }
+/* COSIM_RLIN=lin: log the reference's translations of that linear dword. */
+static uint32_t xlate(uint32_t lin, int write) {
+    uint32_t p = walk(lin, write, 0);
+    static int      rl_init;
+    static uint32_t rl_addr = 0xFFFFFFFFu;
+    if (!rl_init) {
+        const char *e = getenv("COSIM_RLIN");
+        if (e) rl_addr = (uint32_t)strtoul(e, NULL, 0) & ~3u;
+        rl_init = 1;
+    }
+    if ((lin & ~3u) == rl_addr)
+        printf("cosim: rlin #%llu %04x:%08x %s %08x -> %08x = %02x\n",
+               (unsigned long long)ninsn, CS, cpu_state.pc, write ? "wr" : "rd", lin, p,
+               p < ram_bytes ? ram[p & rammask] : 0xFF);
+    return p;
+}
 
 /* A write probe that faulted on the second page of a split access: the
  * first page's part (iss_split_write_first; see split_string_store). */
@@ -285,7 +367,19 @@ static int wr_hook(uint32_t phys, uint8_t v) {
      * in which unchanged bytes they rewrite (z486 writes a descriptor's
      * Accessed bit with the whole high dword, 86Box with a word). */
     int silent = in_ram(phys) && ram[phys & rammask] == v;
-    q_push_ev(&stage_w, (ev_t){ phys, v, 0, (uint8_t)silent, 0 });
+    /* COSIM_WWATCH=phys: log the reference's writes to that dword. */
+    static int      ww_init;
+    static uint32_t ww_addr = 0xFFFFFFFFu;
+    if (!ww_init) {
+        const char *e = getenv("COSIM_WWATCH");
+        if (e) ww_addr = (uint32_t)strtoul(e, NULL, 0) & ~3u;
+        ww_init = 1;
+    }
+    if ((phys & ~3u) == ww_addr)
+        printf("cosim: wwatch #%llu %04x:%08x %08x: %02x -> %02x%s\n",
+               (unsigned long long)ninsn, CS, cpu_state.pc, phys,
+               ram[phys & rammask], v, silent ? " (silent)" : "");
+    q_push_ev(&stage_w, (ev_t){ .addr = phys, .val = v, .silent = (uint8_t)silent, .fpu = (uint8_t)cur_fpu });
     if (phys >= DEV_LO && phys < DEV_HI) return 1;          /* device */
     if ((phys >> 18) == 3) return 1;                        /* write-protected C0000-FFFFF */
     if (phys >= ram_bytes) return 1;                        /* unmapped */
@@ -310,6 +404,8 @@ static uint32_t io_in(uint16_t port, int size) {
 }
 
 static void io_out(uint16_t port, int size, uint32_t val) {
+    if (port == 0xF0)
+        ignne = (fpu_state.swd & FPU_SW_Summary) != 0;
     for (int b = 0; b < size; b++)
         q_push(&stage_io, (uint16_t)(port + b), (val >> (8 * b)) & 0xFF, 0);
 }
@@ -383,6 +479,7 @@ typedef struct {
     uint32_t use32, abrt_error;
     int stack32, trap, oldcpl, cpl_override;
     uint16_t oldcs;
+    fpu_state_t f;          /* last: checkpoint files store it separately */
 } snap_t;
 
 static void snap_save(snap_t *p) {
@@ -393,6 +490,7 @@ static void snap_save(snap_t *p) {
     p->use32 = use32; p->abrt_error = abrt_error;
     p->stack32 = stack32; p->trap = trap; p->oldcpl = oldcpl; p->cpl_override = cpl_override;
     p->oldcs = oldcs;
+    p->f = fpu_state;
 }
 
 static void snap_restore(const snap_t *p) {
@@ -403,6 +501,7 @@ static void snap_restore(const snap_t *p) {
     use32 = p->use32; abrt_error = p->abrt_error;
     stack32 = p->stack32; trap = p->trap; oldcpl = p->oldcpl; cpl_override = p->cpl_override;
     oldcs = p->oldcs;
+    fpu_state = p->f;
 }
 
 static void undo_ram(void) {
@@ -438,9 +537,15 @@ static int match_write(uint32_t phys, uint8_t val) {
             ev_t *e = &exp_w.v[end];
             if (e->done || e->addr != phys) continue;
             if (e->val != val) {
-                fail("write %08x: z486 %02x, reference %02x (instruction #%llu)", phys, val, e->val,
-                     (unsigned long long)grp);
-                return COSIM_ERROR;
+                if (!(x87_lenient && e->fpu)) {
+                    fail("write %08x: z486 %02x, reference %02x (instruction #%llu)", phys, val, e->val,
+                         (unsigned long long)grp);
+                    return COSIM_ERROR;
+                }
+                if (x87_adopted++ < 20)
+                    printf("cosim: x87 store %08x: z486 %02x, reference %02x (instruction #%llu), adopted\n",
+                           phys, val, e->val, (unsigned long long)grp);
+                if (in_ram(phys)) ram[phys & rammask] = val;
             }
             e->done = 1;
             advance_exp();
@@ -538,8 +643,13 @@ void cosim_init(uint32_t bytes) {
     init_mod1_tables();
     cpu_isintel = 1;
     is486 = 1;
+    iss_select_fpu(1);
     cosim_reset();
 }
+
+void cosim_set_fpu(int present) { iss_select_fpu(present); }
+void cosim_set_x87_lenient(int on) { x87_lenient = on; }
+uint64_t cosim_x87_adopted(void) { return x87_adopted; }
 
 uint8_t *cosim_ram(void) { return ram; }
 void cosim_set_a20(int enable) { a20_on = enable; }
@@ -575,6 +685,11 @@ void cosim_reset(void) {
     cpu_state.pc = 0xFFF0;
     EDX = 0x0303;           /* z486 runs the 386 microcode: BOOTUP's signature */
     was_hlt = 0;
+    ignne = 0;
+    /* z486's x87 resets to the FNINIT state. */
+    memset(&fpu_state, 0, sizeof(fpu_state));
+    fpu_state.cwd = 0x037F;
+    fpu_state.tag = 0xFFFF;
 }
 
 uint32_t cosim_eip(void) { return cpu_state.pc; }
@@ -628,6 +743,23 @@ void cosim_arch(uint32_t *w) {
         w[19 + 3 * i] = segs[i]->seg;
         w[20 + 3 * i] = segs[i]->base;
         w[21 + 3 * i] = seg_attr(segs[i], i == 1, i == 0 || i >= 3);
+    }
+    uint32_t *x = w + COSIM_ARCH_X87;
+    x[0] = fpu_state.cwd;
+    x[1] = (fpu_state.swd & ~0x3800u) | ((fpu_state.tos & 7u) << 11);
+    /* The architectural tag word, as FSTENV stores it: softfloat keeps only
+     * empty or valid and classifies the others (zero, special) on demand. */
+    uint16_t tw = 0;
+    for (int i = 0; i < 8; i++) {
+        unsigned tag = (fpu_state.tag >> (2 * i)) & 3;
+        if (tag != 3) tag = FPU_tagof(fpu_state.st_space[i]);
+        tw |= tag << (2 * i);
+    }
+    x[2] = tw;
+    for (int i = 0; i < 8; i++) {
+        x[3 + 3 * i] = (uint32_t)fpu_state.st_space[i].signif;
+        x[4 + 3 * i] = (uint32_t)(fpu_state.st_space[i].signif >> 32);
+        x[5 + 3 * i] = fpu_state.st_space[i].signExp;
     }
 }
 
@@ -687,6 +819,30 @@ static int is_logic_op(const insn_t *d) {
 }
 
 /* Run an instruction; rep_left >= 0 stops a REP string at that count. */
+/* WAIT and the ESC instructions that wait for the x87 (all but FNSTENV,
+ * FNSTCW, FNSAVE, FNSTSW, FNENI, FNDISI, FNCLEX, FNINIT, FNSETPM). */
+static int x87_waits(const insn_t *d) {
+    if (d->op == 0x9B) return 1;
+    if ((d->op & 0xF8) != 0xD8) return 0;
+    const int esc = d->op & 7;
+    const int modrm = (d->mod << 6) | (d->reg << 3) | d->rm;
+    if ((esc == 1 || esc == 5) && d->mod != 3 && d->reg >= 6) return 0;
+    if (esc == 7 && modrm == 0xE0) return 0;
+    if (esc == 3 && modrm >= 0xE0 && modrm <= 0xE4) return 0;
+    return 1;
+}
+
+/* A 486 with CR0.NE=0 and an unmasked x87 error pending freezes at the next
+ * waiting FP instruction until IGNNE# (FERR# raised IRQ13, whose handler
+ * writes port F0h); the interrupt returns to that instruction. 86Box raises
+ * IRQ13 and carries on, so here the instruction does not execute: z486's
+ * IRQ13 is then delivered with the same return address. */
+static int x87_frozen(const insn_t *d) {
+    if (!(fpu_state.swd & FPU_SW_Summary)) ignne = 0;
+    return fpu_present && (fpu_state.swd & FPU_SW_Summary) && !(cr0 & 0x20) && !ignne &&
+           !(cr0 & 0x04) && x87_waits(d);
+}
+
 static int run(long rep_left) {
     if (err[0]) return COSIM_ERROR;
     snap_t snap;
@@ -709,6 +865,10 @@ static int run(long rep_left) {
     uint32_t pre_ecx = ECX;
     uint32_t pre_udf = udf;
     hist_add(CS, pre_pc, cs + pre_pc);
+    if (x87_frozen(&d)) {
+        ninsn++;
+        return commit_writes();
+    }
 
     flags_rebuild();
     pccache = 0xFFFFFFFF;
@@ -854,6 +1014,7 @@ int cosim_step(void) { return run(-1); }
 int cosim_step_rep_to(uint32_t count_left) { return run((long)count_left); }
 
 int cosim_interrupt(int vector) {
+    cur_fpu = 0;            /* the frame is not an FPU store */
     if (err[0]) return COSIM_ERROR;
     mem_log_reset();
     drop_step();
@@ -910,6 +1071,8 @@ void cosim_walker_write(uint32_t phys, uint8_t val) {
  * ============================================================ */
 #define COSIM_CKPT_MAGIC 0x43534D38u    /* CSM8: with RAM */
 #define COSIM_CKPT_NORAM 0x43534D39u    /* CSM9: without */
+#define COSIM_CKPT_FPU   0x00000100u    /* added to either: the x87 state follows */
+#define SNAP_CORE        offsetof(snap_t, f)
 
 static int wr(FILE *f, const void *p, size_t n) { return fwrite(p, 1, n, f) == n ? 0 : -1; }
 static int rd(FILE *f, void *p, size_t n) { return fread(p, 1, n, f) == n ? 0 : -1; }
@@ -940,10 +1103,11 @@ int cosim_save_noram(void *file) { return save_ex(file, 0); }
 int cosim_load_noram(void *file) { return load_ex(file, 0); }
 
 static int save_ex(FILE *f, int with_ram) {
-    uint32_t magic = with_ram ? COSIM_CKPT_MAGIC : COSIM_CKPT_NORAM;
+    uint32_t magic = (with_ram ? COSIM_CKPT_MAGIC : COSIM_CKPT_NORAM) + COSIM_CKPT_FPU;
     snap_t s;
     snap_save(&s);
-    if (wr(f, &magic, sizeof(magic)) || wr(f, &s, sizeof(s)) || wr(f, &ram_bytes, sizeof(ram_bytes)) ||
+    if (wr(f, &magic, sizeof(magic)) || wr(f, &s, SNAP_CORE) || wr(f, &s.f, sizeof(s.f)) ||
+        wr(f, &fpu_present, sizeof(fpu_present)) || wr(f, &ram_bytes, sizeof(ram_bytes)) ||
         wr(f, &a20_on, sizeof(a20_on)) || wr(f, &ninsn, sizeof(ninsn)) ||
         wr(f, &last_fault, sizeof(last_fault)) || wr(f, &was_hlt, sizeof(was_hlt)) ||
         wr(f, &udf, sizeof(udf)) || wr(f, err, sizeof(err)) || wr(f, hist, sizeof(hist)) ||
@@ -957,10 +1121,21 @@ static int save_ex(FILE *f, int with_ram) {
 
 static int load_ex(FILE *f, int with_ram) {
     uint32_t magic, bytes;
+    const uint32_t base = with_ram ? COSIM_CKPT_MAGIC : COSIM_CKPT_NORAM;
     snap_t s;
-    if (rd(f, &magic, sizeof(magic)) || magic != (with_ram ? COSIM_CKPT_MAGIC : COSIM_CKPT_NORAM))
+    int fpu = fpu_present;
+    if (rd(f, &magic, sizeof(magic)) || (magic != base && magic != base + COSIM_CKPT_FPU))
         return -1;
-    if (rd(f, &s, sizeof(s)) || rd(f, &bytes, sizeof(bytes)) || bytes != ram_bytes) return -1;
+    if (rd(f, &s, SNAP_CORE)) return -1;
+    if (magic == base) {
+        /* Saved before the x87 was co-simulated: an FNINIT x87. */
+        memset(&s.f, 0, sizeof(s.f));
+        s.f.cwd = 0x037F;
+        s.f.tag = 0xFFFF;
+    } else if (rd(f, &s.f, sizeof(s.f)) || rd(f, &fpu, sizeof(fpu))) {
+        return -1;
+    }
+    if (rd(f, &bytes, sizeof(bytes)) || bytes != ram_bytes) return -1;
     if (rd(f, &a20_on, sizeof(a20_on)) || rd(f, &ninsn, sizeof(ninsn)) ||
         rd(f, &last_fault, sizeof(last_fault)) || rd(f, &was_hlt, sizeof(was_hlt)) ||
         rd(f, &udf, sizeof(udf)) || rd(f, err, sizeof(err)) || rd(f, hist, sizeof(hist)) ||

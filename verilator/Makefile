@@ -16,7 +16,7 @@ SDL_LIBS=$(shell sdl2-config --libs)
 PNG_CFLAGS=$(shell pkg-config --cflags libpng)
 PNG_LIBS=$(shell pkg-config --libs libpng)
 VERILATOR_X_FLAGS ?=
-VERILATOR_FLAGS = +1800-2017ext+sv --trace-fst --trace-structs --savable --top-module z486_mister_sim --Mdir $(OBJ_DIR) -GCLOCK_RATE_HZ=$(SIM_CLOCK_HZ) -GENABLE_X87=$(ENABLE_X87) --cc --exe $(VERILATOR_X_FLAGS) -CFLAGS "$(SDL_CFLAGS) $(PNG_CFLAGS) $(SIM_OPT_LEVEL) $(SIM_ARCH_FLAGS) -DSIM_SYSTEM_CLOCK_HZ=$(SIM_CLOCK_HZ) -std=c++17 -pthread" -LDFLAGS "$(SDL_LIBS) $(PNG_LIBS) -pthread $(abspath $(COSIM_LIB)) -lm" -Wno-WIDTH -Wno-PINMISSING -Wno-COMBDLY -Wno-TIMESCALEMOD -Wno-IMPLICITSTATIC -Wno-CASEOVERLAP -Wno-CASEINCOMPLETE -Wno-UNOPTFLAT -Wno-REALCVT -Wno-ASCRANGE -Wno-MULTIDRIVEN -Wno-LATCH -Wno-BLKANDNBLK -DZ486_ALTERA_ALU=1
+VERILATOR_FLAGS = +1800-2017ext+sv --trace-fst --trace-structs --savable --top-module z486_mister_sim --Mdir $(OBJ_DIR) -GCLOCK_RATE_HZ=$(SIM_CLOCK_HZ) -GENABLE_X87=$(ENABLE_X87) --cc --exe $(VERILATOR_X_FLAGS) -CFLAGS "$(SDL_CFLAGS) $(PNG_CFLAGS) $(SIM_OPT_LEVEL) $(SIM_ARCH_FLAGS) -DSIM_SYSTEM_CLOCK_HZ=$(SIM_CLOCK_HZ) -DSIM_ENABLE_X87=$(ENABLE_X87) -std=c++17 -pthread" -LDFLAGS "$(SDL_LIBS) $(PNG_LIBS) -pthread $(abspath $(COSIM_LIB)) -lm" -Wno-WIDTH -Wno-PINMISSING -Wno-COMBDLY -Wno-TIMESCALEMOD -Wno-IMPLICITSTATIC -Wno-CASEOVERLAP -Wno-CASEINCOMPLETE -Wno-UNOPTFLAT -Wno-REALCVT -Wno-ASCRANGE -Wno-MULTIDRIVEN -Wno-LATCH -Wno-BLKANDNBLK -DZ486_ALTERA_ALU=1 -DZ486_COSIM=1
 VERILATOR_INCLUDE = -I../src -I../src/z486 -I../src/z486/x87
 
 D=../src
@@ -31,8 +31,7 @@ SOURCES = $(EXTRA_SOURCES) \
 		  $(DZ)/alu.sv $(DZ)/alu_alt.sv $(DZ)/prefetch.sv $(DZ)/segmentation_unit.sv \
 		  $(DZ)/paging_unit.sv $(DZ)/paging_tlb.sv $(DZ)/paging_walker.sv \
 		  $(DZ)/x87/x87_pkg.sv $(DZ)/x87/x87_ucode_pkg.sv \
-		  $(DZ)/x87/x87_bridge.sv $(DZ)/x87/x87_cordic_rom.sv \
-		  $(DZ)/x87/x87_cordic_scratch.sv \
+		  $(DZ)/x87/x87_bridge.sv \
 		  $(DZ)/x87/x87_ucode_rom.sv \
 		  $(DZ)/x87/x87_sequencer.sv $(DZ)/x87/x87_executor.sv \
 		  $(DZ)/x87/x87_transfer_fifo.sv $(DZ)/x87/x87_stack_mem.sv \

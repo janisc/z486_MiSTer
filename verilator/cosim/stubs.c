@@ -426,14 +426,26 @@ int codegen_flat_ss = 0;
 int codegen_flat_ds = 0;
 int codegen_flags_changed = 0;
 
-/* FPU stubs */
+/* FPU: x87.c supplies the x87 helpers; the softfloat (80-bit) ops are used.
+ * IRQ13 comes from the host like any other interrupt, so picint is a no-op. */
 #include "x87_sf.h"
-int fpu_softfloat = 0;
+int fpu_softfloat = 1;
+int fpu_type = FPU_INTERNAL;  /* i486DX; cosim_set_fpu() switches */
+int hasfpu = 1;
 fpu_state_t fpu_state;
-uint32_t x87_pc_off = 0, x87_op_off = 0;
-uint16_t x87_pc_seg = 0, x87_op_seg = 0;
-uint16_t x87_gettag(void) { return 0xFFFF; }
+int cpu_multi = 1;
+double exp_pow_table[0x800];             /* the non-softfloat FXTRACT only */
 void picint(uint32_t mask) { (void)mask; }
+void picintc(uint32_t mask) { (void)mask; }
+void codegen_set_rounding_mode(int mode) { (void)mode; }
+/* x86.c: an x87 memory operand's segment and offset for FSTENV/FSAVE. */
+void fpu_postamble(void) {
+    if (cpu_state.ea_seg != NULL) {
+        cpu_state.fpu_DS = cpu_state.ea_seg->seg;
+        cpu_state.fpu_ds = cpu_state.ea_seg->base;
+    }
+    cpu_state.fpu_ea = cpu_state.eaaddr;
+}
 
 /* Non-_2386 memory functions (called directly by some 386_common.h code) */
 void writememql(uint32_t addr, uint64_t val) { writememql_2386(addr, val); }

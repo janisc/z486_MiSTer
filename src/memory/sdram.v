@@ -61,6 +61,7 @@ module sdram
     input       [3:0] be0,          // byte enable
     output            resp_valid0,  // pulses when a 32-bit read word is ready
     input       [3:0] burst_cnt0,   // read burst dwords (max 15)
+    input             burst_wrap0,  // 4-dword line read: wrap from the requested dword
     output            burst_done0,  // pulses when read burst completes
 
     input             valid1,
@@ -72,6 +73,7 @@ module sdram
     input       [3:0] be1,
     output            resp_valid1,
     input       [3:0] burst_cnt1,
+    input             burst_wrap1,
     output            burst_done1,
 
     input             valid2,
@@ -83,6 +85,7 @@ module sdram
     input       [3:0] be2,
     output            resp_valid2,
     input       [3:0] burst_cnt2,
+    input             burst_wrap2,
     output            burst_done2
 );
 
@@ -234,6 +237,7 @@ reg [4:0]  rd_total_halfs;    // = 2 * effective dword count (<= 30)
 reg [4:0]  rd_issued;         // # of CAS commands already issued
 reg [4:0]  rd_received;       // # of 16-bit words captured from dq
 reg [8:0]  rd_col_base;       // starting dword column (0..511)
+reg        rd_wrap;           // 4-dword line: the column wraps within the line
 reg [15:0] rd_lo16;           // latch low-half before composing 32-bit
 reg [1:0]  rmw_issued;
 reg [1:0]  rmw_received;
@@ -270,6 +274,7 @@ always @(posedge clk) begin
     reg [3:0] req_be;
     reg req_wr;
     reg [3:0] req_burst;
+    reg req_wrap;
 
     // defaults each cycle
     cmd               <= CMD_NOP;
@@ -293,6 +298,7 @@ always @(posedge clk) begin
         req_be = be0;
         req_wr = wr0;
         req_burst = burst_cnt0;
+        req_wrap = burst_wrap0;
     end
     2'd1: begin
         req_addr = addr1;
@@ -300,6 +306,7 @@ always @(posedge clk) begin
         req_be = be1;
         req_wr = wr1;
         req_burst = burst_cnt1;
+        req_wrap = burst_wrap1;
     end
     default: begin
         req_addr = addr2;
@@ -307,6 +314,7 @@ always @(posedge clk) begin
         req_be = be2;
         req_wr = wr2;
         req_burst = burst_cnt2;
+        req_wrap = burst_wrap2;
     end
     endcase;
 
@@ -417,6 +425,7 @@ always @(posedge clk) begin
                 automatic reg [3:0] eff_burst;
                 // A 32MB chip has 256 dword columns; 64MB chips have 512.
                 rd_col_base     <= sdram_size[1] ? req_addr[10:2] : {1'b0, req_addr[9:2]};
+                rd_wrap         <= req_wrap && (req_burst == 4'd4);
                 eff_burst       = (req_burst == 0) ? 1 : req_burst;
                 rd_total_halfs  <= {eff_burst,1'b0};     // *2
                 rd_issued       <= 5'd0;
@@ -435,9 +444,12 @@ always @(posedge clk) begin
             cmd      <= CMD_Read;
             SDRAM_nCS <= req_chip_buf;
             SDRAM_BA <= req_large_buf ? addr_buf[25:24] : addr_buf[24:23];
-            // Column: {dword_col + (rd_issued>>1), half_bit}
+            // Column: {dword_col + (rd_issued>>1), half_bit}; a wrapping line
+            // read keeps the line's column and steps the dword within it.
             // 64MB chips add column A9; A10 remains auto-precharge.
-            col16     = { (rd_col_base + (rd_issued[4:1])), rd_issued[0] };
+            col16     = rd_wrap
+                      ? { rd_col_base[8:2], rd_col_base[1:0] + rd_issued[2:1], rd_issued[0] }
+                      : { (rd_col_base + (rd_issued[4:1])), rd_issued[0] };
             a         <= req_large_buf
                        ? {2'b00, (rd_issued == rd_total_halfs-1), col16}
                        : {2'b00, (rd_issued == rd_total_halfs-1), 1'b0, col16[8:0]};

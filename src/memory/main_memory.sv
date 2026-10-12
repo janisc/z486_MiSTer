@@ -38,6 +38,10 @@ module main_memory (
     input      [2:0]  vga_memmode,
     output reg        vga_read,
     output reg        vga_write,
+    // Chain-4 dword writes go to the VGA in one cycle when it allows them.
+    output reg        vga_write_dword,
+    output reg [31:0] vga_writedata_dword,
+    input             vga_dword_write_ok,
 
     input      [5:0]  vga_wr_seg,
     input      [5:0]  vga_rd_seg,
@@ -67,6 +71,12 @@ reg vga_dout_ready;
 reg [31:0] vga_dout;
 reg vga_accepted;
 reg fb_read_high_dword;
+reg fb_linear;              // FB access through the linear aperture (packed dwords)
+// = 0x0F800000-0x0FBFFFFF: SVGA linear framebuffer, the DDR3 framebuffer
+// itself (as ao486, whose CPU address 248 MB is DDR3 0x3F800000). UniVBE
+// finds it there and reports the ET4000/W32 linear aperture at 248 MB; without
+// it the aperture it picks (240 MB) dropped every write. Above any RAM size.
+wire lfb_rgn = (cpu_addr[31:22] == 10'h03E);
 
 // Keep the configured guest RAM size as a real decode boundary. CMOS reports
 // the same limit, but the physical SDRAM module may be larger.
@@ -89,7 +99,8 @@ assign mem_write      = cpu_write;
 
 // CPU acceptance: either SDRAM accepted or VGA accepted
 assign cpu_ready      = mem_ready | vga_accepted |
-                        (cpu_valid && !vga_rgn && !ram_address_in_range(cpu_addr, ram_size) && state == IDLE);
+                        (cpu_valid && !vga_rgn && !lfb_rgn &&
+                         !ram_address_in_range(cpu_addr, ram_size) && state == IDLE);
 assign cpu_resp_valid = mem_resp_valid | vga_dout_ready;
 assign cpu_dout       = vga_dout_ready ? vga_dout : mem_dout;
 assign cpu_line_dout = mem_line_dout;
@@ -146,9 +157,11 @@ always @(posedge clk) begin
         fb_ddram_din <= 0;
         fb_ddram_be <= 0;
         fb_read_high_dword <= 0;
+        fb_linear <= 0;
     end else begin
         vga_read <= 0;
         vga_write <= 0;
+        vga_write_dword <= 0;
         vga_dout_ready <= 0;
         vga_wr_done <= 0;
         vga_accepted <= 0;
@@ -184,11 +197,13 @@ always @(posedge clk) begin
                     end
                 end
 
-                if (cpu_valid && !cpu_write && !vga_rgn && !ram_address_in_range(cpu_addr, ram_size)) begin
+                if (cpu_valid && !cpu_write && !vga_rgn && !lfb_rgn &&
+                    !ram_address_in_range(cpu_addr, ram_size)) begin
                     vga_busy <= 1;
                     vga_bcnt <= cpu_burstcount == 0 ? 3'd1 : cpu_burstcount[2:0];
                     state <= UNMAPPED_READ;
-                end else if (cpu_valid && vga_rgn && !cpu_write && cpu_burstcount > 8'd1) begin
+                end else if (cpu_valid && (vga_rgn || lfb_rgn) && !cpu_write &&
+                             cpu_burstcount > 8'd1) begin
                     // A burst into the VGA window is an instruction-cache line
                     // fill (data accesses there are single direct cycles),
                     // usually a wrong-path prefetch. Complete it with all ones
@@ -199,9 +214,24 @@ always @(posedge clk) begin
                     vga_busy <= 1;
                     vga_bcnt <= cpu_burstcount[2:0];
                     state <= UNMAPPED_READ;
+                end else if (cpu_valid && lfb_rgn) begin
+                    // Linear framebuffer: one dword of the packed DDR3 image.
+                    vga_accepted <= 1;
+                    vga_busy <= 1;
+                    fb_linear <= 1;
+                    fb_ddram_addr <= (32'h3F80_0000 | {10'b0, cpu_addr[21:0]}) >> 3;
+                    if (cpu_write) begin
+                        state <= FB_WRITE;
+                        fb_ddram_be  <= cpu_addr[2] ? {cpu_be, 4'b0}   : {4'b0,  cpu_be};
+                        fb_ddram_din <= cpu_addr[2] ? {cpu_din, 32'b0} : {32'b0, cpu_din};
+                    end else begin
+                        state <= FB_READ;
+                        fb_read_high_dword <= cpu_addr[2];
+                    end
                 end else if (cpu_valid && vga_rgn) begin
                     vga_accepted <= 1;
                     vga_busy <= 1;
+                    fb_linear <= 0;
                     if (!cpu_write) begin
                         if (vga_fb_en) begin
                             // SVGA: read back from the DDR3 framebuffer (banked by vga_rd_seg)
@@ -249,6 +279,13 @@ always @(posedge clk) begin
                                                   {32'b0, {4{cpu_din[31:24]}}};
                             end
                         end
+                    end else if (vga_dword_write_ok && (cpu_be == 4'hF)) begin
+                        // All four bytes at once; VGA_WRITE then completes
+                        // with no byte left.
+                        state <= VGA_WRITE;
+                        vga_write_dword <= 1;
+                        vga_writedata_dword <= cpu_din;
+                        vga_be <= 4'd0;
                     end else begin
                         state <= VGA_WRITE;
                         vga_write <= 1;
@@ -267,7 +304,7 @@ always @(posedge clk) begin
                 if (!fb_ddram_busy) state <= FB_READ_WAIT;
             FB_READ_WAIT:
                 if (fb_ddram_dout_ready) begin
-                    if (!vga_chain4) begin
+                    if (!vga_chain4 && !fb_linear) begin
                         // VGA reads load all four plane latches and return the
                         // selected plane. Replication makes the selected byte
                         // available in whichever CPU byte lane requested it.

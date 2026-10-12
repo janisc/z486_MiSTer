@@ -41,6 +41,7 @@ module rtc #(
 
 	input       [5:0] bootcfg,
 	input       [1:0] ram_size,
+	input             fpu_off,      // Dev menu: x87 off (a 486SX); CMOS reports no FPU
 
 	//mgmt slave
 	/*
@@ -114,10 +115,13 @@ wire [15:0] configured_checksum =
 // 11h copies CMOS equipment bit 2 into the BDA, and DOS mouse drivers check
 // that bit before calling the INT 15h/C2 services. Keep both synthesized
 // equipment bits reflected in the checksum when absent from the HPS value.
-wire [7:0] configured_equipment = mgmt_equipment |
-    {5'd0, 1'b1, FPU_PRESENT, 1'b0};
+// The FPU bit (1) follows the core, not the HPS value: with the x87 switched
+// off the CPU is a 486SX, and software that trusts INT 11h must not use it.
+wire fpu_present = FPU_PRESENT && !fpu_off;
+wire [7:0] configured_equipment =
+    {mgmt_equipment[7:3], 1'b1, fpu_present, mgmt_equipment[0]};
 wire [15:0] configured_checksum_with_equipment = configured_checksum +
-    {13'd0, ~mgmt_equipment[2], FPU_PRESENT && ~mgmt_equipment[1], 1'b0};
+    {13'd0, 1'b1, fpu_present, 1'b0} - {13'd0, mgmt_equipment[2:1], 1'b0};
 
 reg io_read_last;
 always @(posedge clk) begin if(rst_n == 1'b0) io_read_last <= 1'b0; else if(io_read_last) io_read_last <= 1'b0; else io_read_last <= io_read; end 

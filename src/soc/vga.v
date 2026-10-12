@@ -182,6 +182,12 @@ module vga #(
 	output      [7:0]   mem_readdata,
 	input               mem_write,
 	input       [7:0]   mem_writedata,
+	// Chain-4 dword write: byte i to plane i at one plane address, in one
+	// cycle. Valid only while mem_dword_write_ok (the graphics controller
+	// passes host data unchanged), otherwise the host writes byte by byte.
+	input               mem_write_dword,
+	input      [31:0]   mem_writedata_dword,
+	output              mem_dword_write_ok,
 
 	//interrupt (IRQ2)
 	output              irq,
@@ -1226,7 +1232,7 @@ generate
 		                                 graph_write_enable_map[plane_i] ? {8{graph_write_set_map[plane_i]}} : // write mode 0 with    set/reset enable
 		                                                                   host_writedata_rotate;              // write mode 0 without set/reset enable
 `endif
-		assign host_writedata[plane_i] =
+		assign host_writedata[plane_i] = mem_write_dword ? mem_writedata_dword[8*plane_i +: 8] :
 			(~graph_write_mode[0]) ? ( // Write Mode 0, 2
 				// Logical function (ALU) and Bit Mask combined
 				// 0=Replace:                                                (input &  mask) | (latch & ~mask)
@@ -1248,9 +1254,17 @@ generate
 	end
 endgenerate
 
-wire host_write = mem_write && ~(host_memory_out_of_bounds);
+wire host_write = (mem_write || mem_write_dword) && ~(host_memory_out_of_bounds);
+
+// Write mode 0 with no rotate, no set/reset, the replace function and a full
+// bit mask stores host data unchanged, so a chain-4 dword is its four bytes
+// in planes 0-3 at the dword's plane address.
+assign mem_dword_write_ok = seq_access_chain4 && (graph_write_mode == 2'd0) &&
+                            (graph_write_rotate == 3'd0) && (graph_write_function == 2'd0) &&
+                            (graph_write_enable_map == 4'd0) && (graph_write_mask == 8'hFF);
 
 wire [3:0] host_write_plane_mask =
+	(mem_write_dword)               ? seq_map_write_enable :                                          // chain4 dword: plane i takes byte i
 	(seq_access_chain4)             ? seq_map_write_enable & (4'b0001 << host_address_reduced[1:0]) : // chain4: single plane selected by A1:A0
 	(~seq_access_odd_even_disabled) ? seq_map_write_enable & (4'b0101 << host_address_reduced[0]) :   // (A0=0) even: planes 0,2; (A0=1) odd: planes 1,3
 	                                  seq_map_write_enable;                                           // use map mask directly

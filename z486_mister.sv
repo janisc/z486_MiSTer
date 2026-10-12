@@ -115,6 +115,7 @@ module emu
 
 localparam CLOCK_RATE_HZ = 85_000_000;
 localparam DCACHE_SET_BITS = 7;   // dcache size: 8 = 16KB, 7 = 8KB (4 ways x 16B/line)
+localparam DCACHE_LINE_WRAP = 1'b1; // the SDRAM backend wraps line reads (critical word first)
 localparam ICACHE_SET_BITS = 7;   // icache size: 8 = 16KB, 7 = 8KB
 localparam ENABLE_X87 = 1'b1;     // Experimental x87 sidecar build
 localparam ENABLE_CMS = 1'b0;     // Save about 1K ALMs; OPL2/3 remains available.
@@ -141,7 +142,7 @@ localparam CONF_STR = {
 	"h2P1O[120:118],TV V-position,0,+4,+8,+12,+16,-4,-8,-12;",
 	"h2P1O[121],TV hi-res modes,Line drop,Interlace;",
 	"P1oDE,Scale,Normal,V-Integer,Narrower HV-Integer,Wider HV-Integer;",
-	"P1oM,Border,Yes,No;",
+	"P1oM,Border,No,Yes;",
 	"P1-;",
 	"P1oP,FM mode,OPL3,OPL2 compatibility;",
 	"P1OIJ,PC Speaker Volume,1,2,3,4;",
@@ -623,6 +624,7 @@ wire [31:0] guest_mem0_dout;
 wire        guest_mem0_resp_valid;
 wire  [3:0] guest_mem0_be;
 wire  [7:0] guest_mem0_burstcount;
+wire        guest_mem0_line_read;
 wire        guest_mem0_ready;
 wire        guest_mem0_valid;
 wire        guest_mem0_write;
@@ -655,6 +657,7 @@ split_sdram_backend #(
 	.mem0_resp_valid(guest_mem0_resp_valid),
 	.mem0_be(guest_mem0_be),
 	.mem0_burstcount(guest_mem0_burstcount),
+	.mem0_wrap(guest_mem0_line_read),
 	.mem1_valid(guest_mem1_valid),
 	.mem1_ready(guest_mem1_ready),
 	.mem1_write(guest_mem1_write),
@@ -678,6 +681,7 @@ split_sdram_backend #(
 system #(
 	.SYS_FREQ(CLOCK_RATE_HZ),
 	.DCACHE_SET_BITS(DCACHE_SET_BITS),
+	.DCACHE_LINE_WRAP(DCACHE_LINE_WRAP),
 	.ICACHE_SET_BITS(ICACHE_SET_BITS),
 	.ENABLE_X87(ENABLE_X87),
 	.ENABLE_CMS(ENABLE_CMS),
@@ -718,7 +722,7 @@ system #(
 	.ext_mem0_line_resp_valid(1'b0),
 	.ext_mem0_be         (guest_mem0_be),
 	.ext_mem0_burstcount (guest_mem0_burstcount),
-	.ext_mem0_line_read  (),
+	.ext_mem0_line_read  (guest_mem0_line_read),
 	.ext_mem0_ready      (guest_mem0_ready),
 	.ext_mem0_valid      (guest_mem0_valid),
 	.ext_mem0_write      (guest_mem0_write),
@@ -837,7 +841,7 @@ system #(
 	.video_g             (core_g),
 	.video_b             (core_b),
 	.video_f60           (video_f60),
-	.video_border        (~status[54]),  // OSD "Border" (oM): show the overscan border (both outputs share one raster)
+	.video_border        (status[54]),   // OSD "Border" (oM): show the overscan border, hidden by default as on ao486 (both outputs share one raster)
 	.video_tvmode        (tv15_en),
 	.video_vstretch      (tv15_en & ~status[126]), // OSD "TV frame rate" (O[126]): 60 Hz pads 70 Hz frames to 524 rows in TV mode
 	.video_vzoom         (tv15_en & status[125]),  // OSD "TV picture" (O[125]): Fill = every 5th display scanline twice (200 rows into 240 TV lines)
