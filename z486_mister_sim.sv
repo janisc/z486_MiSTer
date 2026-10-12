@@ -157,6 +157,9 @@ parameter ENABLE_X87 = 1'b1;
 
 wire        software_reset;
 reg  [7:0]  software_reset_count;
+// +z486_x87_off acts as the OSD switch: no x87, and CMOS reports no FPU.
+reg         sim_x87_off = 1'b0;
+initial sim_x87_off = $test$plusargs("z486_x87_off");
 wire        core_reset = reset | (software_reset_count != 8'd0);
 assign soft_reset_req = software_reset;
 
@@ -617,7 +620,7 @@ system #(
 	.cpu_speed_osd      (cpu_speed_osd),
 	.fast_off           (1'b0),          // sim: +z486_fast_off / +z486_fast_toggle=N
 	.cache_off          (1'b0),          // sim: +z486_cache_off / +z486_cache_toggle=N
-	.x87_off            (1'b0),          // sim: +z486_x87_off
+	.x87_off            (sim_x87_off),   // +z486_x87_off, as the OSD switch
 	.syscfg              (syscfg),
 
 	.video_ce            (video_ce),

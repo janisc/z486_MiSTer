@@ -415,6 +415,11 @@ reg         vga_c_cs;
 reg         vga_d_cs;
 reg         debug_port_cs;
 reg         speedctl_cs;
+reg         fpu_cs;             // port F0h: clear the x87 error latch (IGNNE#)
+wire        x87_ferr;           // z486 FERR#: unmasked x87 error pending
+reg         x87_ferr_d;
+reg         x87_ignne;
+reg         irq_13;
 reg   [7:0] ctlport = 0;
 reg   [7:0] speedctl_low = 0;
 
@@ -523,6 +528,8 @@ z486 #(
     .intr              (cpu_intr),
     .nmi               (1'b0),
     .inta              (cpu_inta),
+    .x87_ferr          (x87_ferr),
+    .x87_ignne         (x87_ignne),
     .snoop_addr        (dma_snoop_addr),
     .snoop_valid       (dma_snoop_valid),
     .a20_enable        (a20_enable),
@@ -929,6 +936,25 @@ always @(posedge clk_sys) begin
 		vga_d_cs      <= ({iobus_address_next[15:4], 4'd0} == 16'h03D0);
 		debug_port_cs <= ({iobus_address_next[15:0]      } == 16'h0402);
 		speedctl_cs   <= ({iobus_address_next[15:1], 1'b0} == 16'h8888);
+		fpu_cs        <= (iobus_address_next == 16'h00F0);
+	end
+end
+
+// PC/AT coprocessor error: FERR# raises IRQ13; the handler's write to port F0h
+// clears the request and asserts IGNNE# so the frozen FP instruction proceeds
+// (CR0.NE=0). IGNNE# drops with FERR#, when FNCLEX/FNINIT clears the error.
+always @(posedge clk_sys) begin
+	x87_ferr_d <= x87_ferr;
+	if (reset) begin
+		x87_ignne <= 1'b0;
+		irq_13    <= 1'b0;
+	end else begin
+		if (x87_ferr && !x87_ferr_d) irq_13 <= 1'b1;
+		if (!x87_ferr) x87_ignne <= 1'b0;
+		if (iobus_write && fpu_cs) begin
+			irq_13    <= 1'b0;
+			x87_ignne <= x87_ferr;
+		end
 	end
 end
 
@@ -1249,6 +1275,7 @@ rtc #(
 
 	.bootcfg           ({bootcfg[5:2], bootcfg[1:0] ? bootcfg[1:0] : {~fdd0_inserted, fdd0_inserted}}),
 	.ram_size          (ram_size),
+	.fpu_off           (x87_off),
 
 	.irq               (irq_8)
 );
@@ -1407,6 +1434,7 @@ always @* begin
 	interrupt[9]  = irq_9 | irq_2;
 	interrupt[10] = irq_10;
 	interrupt[12] = irq_12;
+	interrupt[13] = irq_13;
 	interrupt[14] = irq_14;
 	interrupt[15] = irq_15;
 end
