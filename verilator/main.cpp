@@ -1307,9 +1307,9 @@ int main(int argc, char** argv) {
 	vector<std::pair<uint64_t, unsigned>> cpu_speed_events;
 	vector<uint64_t> ctrl_alt_del_cycles;
 	vector<std::pair<uint64_t, fs::path>> vga_plane_events;
-	bool log_eip_enabled = false;
-	uint16_t log_eip_cs = 0;
-	uint32_t log_eip_offset = 0;
+	// --log-eip may repeat: each CS:EIP marker prints when execution reaches it.
+	struct EipMarker { uint16_t cs; uint32_t eip; bool prev; };
+	vector<EipMarker> log_eip_markers;
 	string screenshot_dir;
 	uint64_t screenshot_interval_cycles = 0;
 	uint64_t next_screenshot_cycle = 0;
@@ -1532,9 +1532,10 @@ int main(int argc, char** argv) {
 				cerr << "--log-eip requires hexadecimal CS:EIP\n";
 				return 1;
 			}
-			log_eip_cs = static_cast<uint16_t>(std::stoul(marker.substr(0, separator), nullptr, 16));
-			log_eip_offset = static_cast<uint32_t>(std::stoul(marker.substr(separator + 1), nullptr, 16));
-			log_eip_enabled = true;
+			log_eip_markers.push_back({
+				static_cast<uint16_t>(std::stoul(marker.substr(0, separator), nullptr, 16)),
+				static_cast<uint32_t>(std::stoul(marker.substr(separator + 1), nullptr, 16)),
+				false});
 		} else if (arg == "--screenshot-dir" && i + 1 < argc) {
 			screenshot_dir = argv[++i];
 		} else if (arg == "--screenshot-interval" && i + 1 < argc) {
@@ -1872,7 +1873,6 @@ int main(int argc, char** argv) {
 	bool prev_hs = false;
 	bool prev_de = false;
 	bool bios_dbg_wr_prev = false;
-	bool log_eip_prev = false;
 	int sim_soft_reset_cycles = 0;
 	bool gui_r_soft_reset_active = false;
 	bool gui_c_checkpoint_active = false;
@@ -2853,13 +2853,14 @@ int main(int argc, char** argv) {
 		}
 
 		uint32_t linear_ip = tb.dbg_cs_base + tb.dbg_eip;
-		bool log_eip_now = log_eip_enabled && tb.dbg_cs == log_eip_cs &&
-		                    tb.dbg_eip == log_eip_offset;
-		if (log_eip_now && !log_eip_prev) {
-			cout << sim_time << ": EIP_MARKER " << std::hex << tb.dbg_cs << ":"
-			     << tb.dbg_eip << std::dec << "\n";
+		for (EipMarker& marker : log_eip_markers) {
+			bool now = tb.dbg_cs == marker.cs && tb.dbg_eip == marker.eip;
+			if (now && !marker.prev) {
+				cout << sim_time << ": EIP_MARKER " << std::hex << tb.dbg_cs << ":"
+				     << tb.dbg_eip << std::dec << "\n";
+			}
+			marker.prev = now;
 		}
-		log_eip_prev = log_eip_now;
 		if (!saw_boot_sector && linear_ip >= 0x7C00 && linear_ip < 0x7E00) {
 			saw_boot_sector = true;
 			cout << sim_time << ": boot sector execution at " << std::hex

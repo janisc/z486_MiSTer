@@ -32,6 +32,8 @@
 
 /* Config stubs */
 #define machine_at 1
+extern int fpu_softfloat;   /* x87 ops use softfloat (stubs.c) */
+extern int fpu_type;        /* FPU_INTERNAL (stubs.c) */
 
 #ifdef __GNUC__
 #    define UNLIKELY(x) __builtin_expect(!!(x), 0)

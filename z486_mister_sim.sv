@@ -130,6 +130,8 @@ module z486_mister_sim (
 	output [31:0] cosim_ecx,
 	output [31:0] cosim_eflags,
 	output        cosim_a20,
+	output        cosim_x87_on,      // z486's x87 is on (ENABLE_X87, not +z486_x87_off)
+	output        cosim_rpti,        // microcode RPTI: the instruction restarts after an interrupt
 	output        cosim_dreq_acc,
 	output        cosim_dreq_write,
 	output [31:0] cosim_dreq_addr,
@@ -1022,6 +1024,8 @@ assign cosim_issue_eip        = system_i.z486_cpu.EIP;
 assign cosim_ecx              = system_i.z486_cpu.data_unit_inst.gpr_capture_view[1];
 assign cosim_eflags           = system_i.z486_cpu.eflags_fwd;
 assign cosim_a20              = system_i.z486_cpu.a20_enable;
+assign cosim_x87_on           = !system_i.z486_cpu.x87_off;
+assign cosim_rpti             = system_i.z486_cpu.uc_addr == 12'h208;  // RPTI
 assign cosim_dreq_acc         = system_i.z486_cpu.dcache_req_valid && system_i.z486_cpu.dcache_req_accepted;
 assign cosim_dreq_write       = system_i.z486_cpu.dcache_req_write;
 assign cosim_dreq_addr        = system_i.z486_cpu.dcache_req_phys_addr_raw;

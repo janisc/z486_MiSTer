@@ -21,6 +21,13 @@ enum {
 };
 
 void cosim_init(uint32_t ram_bytes);
+/* The reference has an x87 (softfloat, as an i486DX) unless z486's is off;
+ * without one an ESC raises #NM when CR0.EM or CR0.TS is set, else is a NOP. */
+void cosim_set_fpu(int present);
+/* FPU stores whose bytes differ are taken from z486 (logged, counted): for
+ * z486's x87, which is not bit-exact (COSIM_X87_VALUES=0). */
+void cosim_set_x87_lenient(int on);
+uint64_t cosim_x87_adopted(void);
 uint8_t *cosim_ram(void);
 void cosim_reset(void);             /* CPU reset; RAM is kept */
 void cosim_set_a20(int enable);
@@ -54,8 +61,12 @@ void cosim_walker_write(uint32_t phys, uint8_t val);    /* z486's A/D update */
 int  cosim_writes_pending(void);    /* reference writes z486 has not done yet */
 
 /* Portable snapshots: the architectural state z486 is restored to, as the
- * words of z486_mister_sim.sv's cosim_load_arch (COSIM_ARCH_WORDS of them). */
-#define COSIM_ARCH_WORDS 43
+ * words of z486_mister_sim.sv's cosim_load_arch (COSIM_ARCH_WORDS of them).
+ * Words 43-69 are the x87: control, status (TOP in 13:11), tag, then for
+ * each physical register 0-7 the significand low and high and sign/exponent
+ * (x87_control.sv cosim_load_x87). */
+#define COSIM_ARCH_WORDS 70
+#define COSIM_ARCH_X87 43
 void cosim_arch(uint32_t *w);
 /* A snapshot may be taken before the next instruction: every write matched,
  * no HLT, and no interrupt shadow (STI, MOV SS, POP SS just ran). */

@@ -16,6 +16,9 @@ void cosim_init(uint32_t ram_bytes) {
     exit(1);
 }
 
+void cosim_set_fpu(int present) { (void)present; }
+void cosim_set_x87_lenient(int on) { (void)on; }
+uint64_t cosim_x87_adopted(void) { return 0; }
 uint8_t *cosim_ram(void) { return NULL; }
 void cosim_reset(void) {}
 void cosim_set_a20(int enable) { (void)enable; }

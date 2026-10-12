@@ -7,6 +7,11 @@ submodule: [nand2mario/86Box](https://github.com/nand2mario/86Box) branch
 changes:
 
 ```
+67498bf cpu: a JMP to a task leaves the new task's NT as loaded from its TSS
+80bbf9b cpu: EFLAGS loaded by a task switch keeps the fixed bits
+d5af6ae cpu: a task switch sets the new CS descriptor's accessed bit
+8b90f9a cpu: a task switch does not save CR3 in the old TSS
+cb52e29 cpu: SHLD/SHRD r16 with a count of 17..31 shift dest:src:src / src:src:dest
 1593f9b cpu: GEN386PM_NO_FPU builds the CPU core without the FPU
 07e310c cpu: XADD r, r writes DEST last
 819686c cpu: SHLD/SHRD set OF on a 1-bit shift and read DEST for a 0 count
@@ -47,6 +52,15 @@ Bugs in 86Box (candidates to report upstream):
 * MOV DR7 set bit 10 on every write; a 386/486 resets DR7 to 0 (i486 PRM
   Table 10-1) and keeps a written bit 10 as written (Links 386 Pro's DOS
   extender saves and restores DR7).
+* SHLD/SHRD r16 with a count of 17..31 filled with zeros; the 386 shifts
+  dest:src:src (SHLD) or src:src:dest (SHRD), CF the last bit out (386
+  SingleStepTests, every register case; Blood Bath at Red Falls).
+* Task switches (Blood Bath at Red Falls' JMPs between two TSSs): the old
+  task's CR3 was saved into its TSS (the 386 SAVE_TASK microcode writes only
+  selectors, GPRs, EFLAGS and EIP); the new CS descriptor's accessed bit was
+  not set; EFLAGS from the new TSS kept bit 1 clear and bits 3/5/15 as
+  stored; a JMP through a TSS or task gate cleared NT in the new task (SDM
+  table 7-2: JMP leaves it as loaded).
 * Not changed in the CPU sources but handled in our glue: faults do not set
   RF in the pushed EFLAGS image and RF is never cleared when an instruction
   completes (i486 PRM 9.3.3, 11.3.1.1); POP r assigns before its fault
@@ -54,7 +68,9 @@ Bugs in 86Box (candidates to report upstream):
 
 Co-simulation switches and choices that follow z486 (keep on our branch):
 
-* `GEN386PM_NO_FPU` stubs the FPU escape ops (the reference has no FPU).
+* The reference is built with the x87 (softfloat ops and softfloat3e);
+  `cosim_set_fpu()` points the ESC tables at them or, with z486's x87 off, at
+  86Box's `nofpu` tables. `GEN386PM_NO_FPU` is no longer defined.
 * `iss_ss_chain`: MOV SS / POP SS run the next instruction within the op
   (86Box's interrupt shadow) only when set; cosim86 clears it to step one
   instruction at a time.

@@ -28,6 +28,8 @@
 #include "x86.h"
 #include "x86_ops.h"
 #include "x86seg_common.h"
+#include "x87_sf.h"
+#include "x87.h"
 #include <86box/io.h>
 #include <86box/nmi.h>
 #include <86box/mem.h>
@@ -79,12 +81,8 @@ uintptr_t old_rl2 = 0;
 extern int uncached;
 int uncached = 0;
 
-/* WAIT/FWAIT (0x9B) with no FPU: #NM when CR0.TS and CR0.MP are both set. */
-static int opWAIT(uint32_t fetchdat) {
-    (void)fetchdat;
-    if ((cpu_state.CR0.l & 0x0A) == 0x0A) { x86_int(7); return 1; }
-    return 0;
-}
+/* WAIT/FWAIT is 86Box's (x86_ops_fpu_2386.h): #NM when CR0.TS and CR0.MP
+ * are both set, then an unmasked x87 exception (with no FPU, never). */
 
 /* ============================================================
  * Opcode tables - from 386.c / 386_ops.h
@@ -229,23 +227,28 @@ const OpFn *x86_2386_opcodes_0f    = ops_2386_486_0f;
 const OpFn *x86_2386_opcodes_REPE  = ops_2386_REPE;
 const OpFn *x86_2386_opcodes_REPNE = ops_2386_REPNE;
 
-/* FPU opcode table pointers - NULL since FPU is stubbed out */
-const OpFn *x86_2386_opcodes_d8_a16 = NULL;
-const OpFn *x86_2386_opcodes_d8_a32 = NULL;
-const OpFn *x86_2386_opcodes_d9_a16 = NULL;
-const OpFn *x86_2386_opcodes_d9_a32 = NULL;
-const OpFn *x86_2386_opcodes_da_a16 = NULL;
-const OpFn *x86_2386_opcodes_da_a32 = NULL;
-const OpFn *x86_2386_opcodes_db_a16 = NULL;
-const OpFn *x86_2386_opcodes_db_a32 = NULL;
-const OpFn *x86_2386_opcodes_dc_a16 = NULL;
-const OpFn *x86_2386_opcodes_dc_a32 = NULL;
-const OpFn *x86_2386_opcodes_dd_a16 = NULL;
-const OpFn *x86_2386_opcodes_dd_a32 = NULL;
-const OpFn *x86_2386_opcodes_de_a16 = NULL;
-const OpFn *x86_2386_opcodes_de_a32 = NULL;
-const OpFn *x86_2386_opcodes_df_a16 = NULL;
-const OpFn *x86_2386_opcodes_df_a32 = NULL;
+/* FPU opcode tables: the softfloat x87 (an i486DX) or, with z486's x87 off,
+ * the no-FPU ESC behaviour (#NM when CR0.EM or CR0.TS, else no operation). */
+const OpFn *x86_2386_opcodes_d8_a16, *x86_2386_opcodes_d8_a32;
+const OpFn *x86_2386_opcodes_d9_a16, *x86_2386_opcodes_d9_a32;
+const OpFn *x86_2386_opcodes_da_a16, *x86_2386_opcodes_da_a32;
+const OpFn *x86_2386_opcodes_db_a16, *x86_2386_opcodes_db_a32;
+const OpFn *x86_2386_opcodes_dc_a16, *x86_2386_opcodes_dc_a32;
+const OpFn *x86_2386_opcodes_dd_a16, *x86_2386_opcodes_dd_a32;
+const OpFn *x86_2386_opcodes_de_a16, *x86_2386_opcodes_de_a32;
+const OpFn *x86_2386_opcodes_df_a16, *x86_2386_opcodes_df_a32;
+static int fpu_present;
+
+static void iss_select_fpu(int present) {
+    fpu_present = present;
+    fpu_type = present ? FPU_INTERNAL : FPU_NONE;
+    hasfpu = present;
+#define SEL(op, sf) \
+    x86_2386_opcodes_##op##_a16 = present ? ops_2386_sf_fpu_##op##_a16 : ops_2386_nofpu_a16; \
+    x86_2386_opcodes_##op##_a32 = present ? ops_2386_sf_fpu_##op##_a32 : ops_2386_nofpu_a32;
+    SEL(d8, 1) SEL(d9, 1) SEL(da, 1) SEL(db, 1) SEL(dc, 1) SEL(dd, 1) SEL(de, 1) SEL(df, 1)
+#undef SEL
+}
 
 /* ============================================================
  * External stubs from stubs.c
