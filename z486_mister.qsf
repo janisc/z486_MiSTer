@@ -291,6 +291,7 @@ set_global_assignment -name QIP_FILE backend.qip
 set_global_assignment -name SDC_FILE z486_mister.sdc
 set_global_assignment -name SEARCH_PATH sys
 set_global_assignment -name SEARCH_PATH src/z486
+set_global_assignment -name SEARCH_PATH src/z486/x87
 set_global_assignment -name SYSTEMVERILOG_FILE z486_mister.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/z486/z486_pkg.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/z486/ucode_rom.sv
@@ -321,9 +322,6 @@ set_global_assignment -name SYSTEMVERILOG_FILE src/z486/protection.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/z486/segmentation_unit.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/z486/x87/x87_pkg.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/z486/x87/x87_bridge.sv
-set_global_assignment -name SYSTEMVERILOG_FILE src/z486/x87/x87_cordic_rom.sv
-set_global_assignment -name SYSTEMVERILOG_FILE src/z486/x87/x87_cordic_scratch.sv
-set_global_assignment -name MIF_FILE src/z486/x87/x87_cordic_atan.mif
 set_global_assignment -name SYSTEMVERILOG_FILE src/z486/x87/x87_ucode_pkg.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/z486/x87/x87_ucode_rom.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/z486/x87/x87_sequencer.sv
@@ -333,6 +331,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE src/z486/x87/x87_stack_mem.sv
 set_global_assignment -name MIF_FILE src/z486/x87/x87_ucode.mif
 set_global_assignment -name SYSTEMVERILOG_FILE src/z486/x87/x87_command_rom.sv
 set_global_assignment -name MIF_FILE src/z486/x87/x87_command_decode.mif
+set_global_assignment -name MIF_FILE src/z486/x87/x87_logexp_tables.mif
 set_global_assignment -name SYSTEMVERILOG_FILE src/z486/x87/x87_control.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/z486/x87/x87_unit.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/z486/z486.sv

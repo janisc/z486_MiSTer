@@ -54,6 +54,7 @@ PROFILES: dict[str, Profile] = {
         assignments=(
             ("OPTIMIZATION_MODE", "BALANCED"),
             ("ALLOW_POWER_UP_DONT_CARE", "ON"),
+            ("FITTER_AGGRESSIVE_ROUTABILITY_OPTIMIZATION", "ALWAYS"),
         ),
     ),
     "debug": Profile(
@@ -64,6 +65,7 @@ PROFILES: dict[str, Profile] = {
         assignments=(
             ("OPTIMIZATION_MODE", "BALANCED"),
             ("ALLOW_POWER_UP_DONT_CARE", "ON"),
+            ("FITTER_AGGRESSIVE_ROUTABILITY_OPTIMIZATION", "ALWAYS"),
         ),
     ),
     "production": Profile(
@@ -241,6 +243,11 @@ def detect_active_profile() -> str | None:
 
 
 def run_quartus() -> int:
+    # Compile from a clean database, as seed_sweep.py does. An in-place compile
+    # kept the x87 ROM contents of an old db/ although the .mif files had
+    # changed: the board ran FSINCOS as FNOP while the simulators had it.
+    for stale in ("db", "incremental_db"):
+        shutil.rmtree(PROJECT_DIR / stale, ignore_errors=True)
     return subprocess.call(["quartus_sh", "--flow", "compile", PROJECT], cwd=PROJECT_DIR)
 
 
