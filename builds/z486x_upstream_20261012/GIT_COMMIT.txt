@@ -1,0 +1,1 @@
+d8eb836ae2a87c601f492ece6927d0cfb0045d72 Merge upstream 20261012: build 1 (direct, fitter seed 6): 39,156 ALMs = 93 %, 497 M10K, clk_sys -6.198 / TNS -27801, pll_hdmi +0.248, hold clean

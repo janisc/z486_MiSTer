@@ -1,0 +1,1 @@
+5d8b09b3cf42ca2b716dc66c5a972cc30c42724a exp/upstream-20261008 test build (single compile, qsf seed 4: 40,012 ALMs = 95 %, clk_sys -6.566 / TNS -28675, pll_hdmi -0.092)
