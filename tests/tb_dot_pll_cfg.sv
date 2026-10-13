@@ -139,9 +139,7 @@ task family(input [7:0] div, input [31:0] frac, input string label);
 		join
 		repeat (400) @(posedge clk);
 		compare(label);
-		$display("  C0 read back by the driver: 00h %04h 11h %04h  %s", dr_rb0, dr_rb1,
-		         (dr_rb0 == {1'b0, div[7:1], 1'b0, div[7:1]}) ? "ok" : "FAIL");
-		if (dr_rb0 != {1'b0, div[7:1], 1'b0, div[7:1]}) fails = fails + 1;
+		$display("  C0 read back by the driver: 00h %04h 11h %04h (informational: the driver reads nothing back since build 9)", dr_rb0, dr_rb1);
 	end
 endtask
 
