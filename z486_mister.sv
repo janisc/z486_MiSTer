@@ -551,7 +551,7 @@ function [7:0] dot_c0_half;         // C0 = /36, /32, /28, /26, /14, /12 of the 
 	endcase
 endfunction
 
-dot_pll_cfg #(.FPLL1(0)) dpll_cfg     // first-half map: z486_mister.qsf pins the PLL to FRACTIONALPLL_X0_Y15
+dot_pll_cfg dpll_cfg                  // the IP's periphery around a fixed sequence; its fitter-patched cell picks the register map
 (
 	.clk               (CLK_50M),
 	.req               (dot_cfg_req),

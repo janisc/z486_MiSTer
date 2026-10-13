@@ -1,41 +1,39 @@
 // dot_pll_cfg: a minimal reconfiguration driver for the dot-clock PLL (rtl/pll_video.v).
 //
-// The framework's altera_pll_reconfig IP does this job in 1,221 ALMs, with shadow
-// registers for 18 counters, phase shifting, a MIF ROM and an Avalon slave. This core
-// only ever changes the output counter C0 and the fractional part K of M (M's integer
-// part, N and the counters' bypass and odd-division bits keep their power-up values),
-// so this driver speaks the PLL's DPRIO interface (reconfig_to_pll / reconfig_from_pll)
-// for exactly that, and it does so with the IP's bus, cycle for cycle:
+// The framework's altera_pll_reconfig IP does this job in 1,221 ALMs, with an Avalon
+// slave, shadow registers for 18 counters, a MIF reader and dynamic phase shifting.
+// This core only ever changes the output counter C0 and the fractional part K of M
+// (M's integer part, N and the counters' bypass and odd-division bits keep their
+// power-up values), so this driver issues exactly the DPRIO transactions the IP issues
+// for that, through the IP's own periphery, taken verbatim from
+// sys/pll_cfg/altera_pll_reconfig_core.v:
 //
-//  * power-up: the DPRIO reset held for 341 clocks, then 64 writes of zero to the
-//    addresses 0..63 (two more at address 0 first, from the IP's reset synchronizer)
-//    and the mdio_dis / ser_shift_load hand-over pattern of the IP's fpll_dprio_init
-//    with the address held at 0, after which mdio_dis stays 0 and ser_shift_load 1;
-//  * a request, as the IP's states ONE..TEN do it for the six Avalon writes of the
-//    original table machine: for each of N, M and C0 the counter value (13h, 12h,
-//    00h), reads of the bypass register 15h and the odd-division register 17h, two
-//    idle cycles while the data arrive, then both registers written back with that
-//    counter's bit changed (N bypassed, M and C0 not, no odd division); then K: 17h
-//    read, written back with the K-ready bit 11 clear, K's low and high halves
-//    (18h, 19h), 17h with the ready bit set. The PLL relocks by itself. Idle cycles
-//    drive address, data and byte enables to zero, as the IP does. Finally the C0
-//    register is read back at 00h and at 11h (rb_c0a, rb_c0b) for the test tools.
+//  * self_reset and fpll_dprio_init: the DPRIO reset held for 341 clocks, 64 writes
+//    of zero to the addresses 0..63 and the mdio_dis / ser_shift_load hand-over
+//    pattern, after which mdio_dis stays 0 and ser_shift_load 1;
+//  * dprio_mux between the init block and the sequencer below, and the IP's kept
+//    nets (synthesis keep) and fitter-patched cells on the way to the PLL: the
+//    half flag lcell_fpll_0_1 (the fitter sets it for the second PLL of a DPRIO
+//    pair, whose counter C0 sits at 11h instead of 00h), the read strobe cell and
+//    the counter-select cells. Three versions with a plain copy of this periphery
+//    left the PLL at its power-up configuration on the card although every bus
+//    cycle matched the IP's in simulation (builds 4 to 6 of 2026-10-13); the real
+//    difference, if any, is physical, so the periphery is the IP's itself.
+//
+// A request runs the IP's states ONE..TEN for the six Avalon writes of the original
+// table machine, cycle for cycle: for each of N, M and C0 the counter value (13h,
+// 12h, C0's address), reads of the bypass register 15h and the odd-division register
+// 17h, two idle cycles while the data arrive, then both registers written back with
+// that counter's bit changed (N bypassed, M and C0 not, no odd division); then K: 17h
+// read, written back with the K-ready bit 11 clear, K's low and high halves (18h,
+// 19h), 17h with the ready bit set. The PLL relocks by itself. Idle cycles drive
+// address, data and byte enables to zero, as the IP does. Finally the C0 register is
+// read back at 00h and at 11h (rb_c0a, rb_c0b) for the test tools.
 //
 // DPRIO transactions are one clock wide; a read's data is on reconfig_from_pll[15:0]
-// two clocks after the strobe. The outputs here are registered, so the bus runs one
-// clock behind the step counter; the captures are placed accordingly.
-//
-// The first version wrote the same registers in a different order, let the address
-// keep counting through the hand-over pattern and held the byte enables at 11
-// between transactions; the register contents matched the IP's in simulation, but
-// on the card the PLL never left its power-up configuration (builds 4 and 5 of
-// 2026-10-13). Hence the exact copy.
-//
-// FPLL1: the fractional PLLs come in pairs on one DPRIO block and the second PLL of a
-// pair mirrors the counter registers (its C0 is at 11h; the IP has the fitter patch a
-// LUT for this). The fitter reports the first half for every location this core has
-// used (X0_Y1, X0_Y15, X89_Y1), so the default map is 0.
-module dot_pll_cfg #(parameter FPLL1 = 0)
+// two clocks after the strobe. The sequencer's outputs are registered, so the bus
+// runs one clock behind the step counter; the captures are placed accordingly.
+module dot_pll_cfg
 (
 	input             clk,              // the PLL's management clock (50 MHz); it is also the DPRIO clock
 	input             req,              // level: reconfigure to the values below (edge-detected)
@@ -43,7 +41,7 @@ module dot_pll_cfg #(parameter FPLL1 = 0)
 	input       [7:0] c0_lo,
 	input      [31:0] m_frac,           // K: the fractional part of M, 32 bits
 	output reg        busy,             // 1 from the request to the end of the sequence
-	output reg        ready,            // 1 once the power-up initialization is over
+	output            ready,            // 1 once the power-up initialization is over
 	output            locked,           // the PLL's lock, synchronized
 	output reg [15:0] rb_c0a,           // the C0 register read back at 00h after the last request
 	output reg [15:0] rb_c0b,           // the same at 11h (the other half's map)
@@ -51,38 +49,38 @@ module dot_pll_cfg #(parameter FPLL1 = 0)
 	input      [63:0] reconfig_from_pll
 );
 
-localparam [5:0] C0_ADDR = FPLL1 ? 6'h11 : 6'h00;
+localparam device_family = "Cyclone V";
 
-// ---- power-up: DPRIO reset, then the init writes (altera_pll_reconfig_core's self_reset and fpll_dprio_init)
-reg  [8:0] rst_cnt = 9'd0;
-reg        init_reset = 1'b1;           // reconfig_to_pll[1] = ~init_reset
-reg  [1:0] rst_sync = 2'b00;            // the IP's two-flop release of its init counter: two extra writes at 0
-reg  [6:0] icnt = 7'd0;                 // 0..63 writes, 64..68 the hand-over pattern, holds at 68
-reg        init_done = 1'b0;
-reg        mdio_dis = 1'b1;
-reg        ser_shift_load = 1'b1;
+// ---- the IP's periphery: reset timing, lock synchronizer, the DPRIO init block
+wire        reset, dprio_init_reset;
+self_reset self_reset_inst (.mgmt_reset(1'b0), .clk(clk), .reset(reset), .init_reset(dprio_init_reset));
 
-always @(posedge clk) begin
-	if (init_reset) begin
-		if (rst_cnt == 9'd341) init_reset <= 1'b0;
-		else rst_cnt <= rst_cnt + 1'd1;
-	end
-	else begin
-		rst_sync <= {rst_sync[0], 1'b1};
-		if (rst_sync[1] && !init_done) begin
-			if (icnt == 7'd68) init_done <= 1'b1;     // the IP's done flag rises with mdio_dis's fall; the pattern is level from here
-			else icnt <= icnt + 1'd1;
-		end
-	end
-	// the IP's levels: during the init writes mdio_dis = 1 and ser_shift_load = 1; from count 64 on
-	// ser_shift_load = |count[2:1] and mdio_dis = ~count[2], which end at 1 and 0 with the count held at 68
-	mdio_dis       <= init_reset ? 1'b1 : (icnt[6] ? ~icnt[2] : 1'b1);
-	ser_shift_load <= init_reset ? 1'b1 : (icnt[6] ? |icnt[2:1] : 1'b1);
-	ready          <= init_done;
+wire        locked_orig = reconfig_from_pll[16];
+altera_std_synchronizer #(.depth(3)) altera_std_synchronizer_inst (.clk(clk), .reset_n(1'b1), .din(locked_orig), .dout(locked));
+
+wire  [5:0] init_dprio_address;
+wire        init_dprio_read, init_dprio_write, init_atpgmode, init_mdio_dis, init_scanen, init_ser_shift_load, dprio_init_done;
+wire  [1:0] init_dprio_byteen;
+wire [15:0] init_dprio_writedata;
+fpll_dprio_init fpll_dprio_init_inst (
+	.clk(clk), .reset_n(~reset), .locked(locked),
+	.dprio_address(init_dprio_address), .dprio_read(init_dprio_read), .dprio_byteen(init_dprio_byteen),
+	.dprio_write(init_dprio_write), .dprio_writedata(init_dprio_writedata),
+	.atpgmode(init_atpgmode), .mdio_dis(init_mdio_dis), .scanen(init_scanen), .ser_shift_load(init_ser_shift_load),
+	.dprio_init_done(dprio_init_done));
+assign ready = dprio_init_done;
+
+// the half flag: the fitter rewrites this cell's mask for the second PLL of a DPRIO pair
+wire fpll_1;
+generic_lcell_comb lcell_fpll_0_1 (.dataa(1'b0), .combout(fpll_1));
+defparam lcell_fpll_0_1.lut_mask = 64'hAAAAAAAAAAAAAAAA;
+defparam lcell_fpll_0_1.dont_touch = "on";
+defparam lcell_fpll_0_1.family = device_family;
+reg   [5:0] c0_addr;                   // an if, as the IP: an open cell input simulates as X, which must not spread
+always @* begin
+	c0_addr = 6'h00;
+	if (fpll_1) c0_addr = 6'h11;
 end
-
-wire        init_write = !init_reset && !init_done && !icnt[6];
-wire  [5:0] init_addr  = icnt[6] ? 6'd0 : icnt[5:0];      // address 0 through the hand-over, as the IP
 
 // ---- the request sequence, one step a clock (see the header)
 localparam [5:0] LAST = 6'd36;
@@ -119,7 +117,7 @@ always @(posedge clk) begin
 	dp_be    <= 2'b00;
 	if (step == 6'd0) begin
 		busy <= 1'b0;
-		if (init_done && req && !req_d) begin
+		if (dprio_init_done && req && !req_d) begin
 			c0_hi_r <= c0_hi; c0_lo_r <= c0_lo; k_r <= m_frac;
 			busy <= 1'b1;
 			step <= 6'd1;
@@ -143,7 +141,7 @@ always @(posedge clk) begin
 			6'd13: begin r17 <= reconfig_from_pll[15:0]; wr(6'h15, r15 & ~16'h0010); end     // M not bypassed
 			6'd14: wr(6'h17, r17 & ~16'h0010);
 			// C0
-			6'd15: wr(C0_ADDR, {c0_hi_r, c0_lo_r});
+			6'd15: wr(c0_addr, {c0_hi_r, c0_lo_r});
 			6'd16: rd(6'h15);
 			6'd17: rd(6'h17);
 			6'd19: r15 <= reconfig_from_pll[15:0];
@@ -166,26 +164,93 @@ always @(posedge clk) begin
 	end
 end
 
-// ---- lock, synchronized as the IP does
-reg [1:0] lock_s = 2'b00;
-always @(posedge clk) lock_s <= {lock_s[0], reconfig_from_pll[16]};
-assign locked = lock_s[1];
+// ---- the bus to the PLL: the IP's mux and its kept nets
+wire  [5:0] dprio_address /*synthesis keep*/;
+wire        dprio_read /*synthesis keep*/;
+wire  [1:0] dprio_byteen /*synthesis keep*/;
+wire        dprio_write /*synthesis keep*/;
+wire [15:0] dprio_writedata /*synthesis keep*/;
+wire        dprio_mdio_dis /*synthesis keep*/;
+wire        dprio_ser_shift_load /*synthesis keep*/;
+wire        dprio_atpgmode /*synthesis keep*/;
+wire        dprio_scanen /*synthesis keep*/;
+wire        phase_en /*synthesis keep*/;
+wire        up_dn /*synthesis keep*/;
+wire        gnd /*synthesis keep*/;
+assign gnd = 1'b0;
 
-// ---- the bus (the IP's bit map)
+dprio_mux dprio_mux_inst (
+	.init_dprio_address(init_dprio_address), .init_dprio_read(init_dprio_read), .init_dprio_byteen(init_dprio_byteen),
+	.init_dprio_write(init_dprio_write), .init_dprio_writedata(init_dprio_writedata),
+	.init_atpgmode(init_atpgmode), .init_mdio_dis(init_mdio_dis), .init_scanen(init_scanen), .init_ser_shift_load(init_ser_shift_load),
+	.dprio_init_done(dprio_init_done),
+	.avmm_dprio_address(dp_addr), .avmm_dprio_read(dp_read), .avmm_dprio_byteen(dp_be),
+	.avmm_dprio_write(dp_write), .avmm_dprio_writedata(dp_data),
+	.avmm_atpgmode(1'b0), .avmm_mdio_dis(1'b0), .avmm_scanen(1'b0), .avmm_ser_shift_load(1'b1),
+	.dprio_address(dprio_address), .dprio_read(dprio_read), .dprio_byteen(dprio_byteen),
+	.dprio_write(dprio_write), .dprio_writedata(dprio_writedata),
+	.atpgmode(dprio_atpgmode), .mdio_dis(dprio_mdio_dis), .scanen(dprio_scanen), .ser_shift_load(dprio_ser_shift_load));
+
+// no dynamic phase shift: its registers at rest, kept as the IP keeps them
+reg  [4:0] usr_cnt_sel /*synthesis preserve*/;
+reg        usr_up_dn /*synthesis preserve*/;
+reg        usr_phase_en /*synthesis preserve*/;
+initial begin
+	usr_cnt_sel  = 5'd0;
+	usr_up_dn    = 1'b0;
+	usr_phase_en = 1'b0;
+end
+always @(posedge clk) begin
+	usr_cnt_sel  <= 5'd0;
+	usr_up_dn    <= 1'b0;
+	usr_phase_en <= 1'b0;
+end
+assign up_dn    = usr_up_dn;
+assign phase_en = usr_phase_en;
+
+wire  [4:0] cnt_sel;
+generic_lcell_comb lcell_cnt_sel_0 (.dataa(usr_cnt_sel[0]), .datab(usr_cnt_sel[1]), .datac(usr_cnt_sel[2]), .datad(usr_cnt_sel[3]), .datae(usr_cnt_sel[4]), .dataf(gnd), .combout(cnt_sel[0]));
+defparam lcell_cnt_sel_0.lut_mask = 64'hAAAAAAAAAAAAAAAA;
+defparam lcell_cnt_sel_0.dont_touch = "on";
+defparam lcell_cnt_sel_0.family = device_family;
+generic_lcell_comb lcell_cnt_sel_1 (.dataa(usr_cnt_sel[0]), .datab(usr_cnt_sel[1]), .datac(usr_cnt_sel[2]), .datad(usr_cnt_sel[3]), .datae(usr_cnt_sel[4]), .dataf(gnd), .combout(cnt_sel[1]));
+defparam lcell_cnt_sel_1.lut_mask = 64'hCCCCCCCCCCCCCCCC;
+defparam lcell_cnt_sel_1.dont_touch = "on";
+defparam lcell_cnt_sel_1.family = device_family;
+generic_lcell_comb lcell_cnt_sel_2 (.dataa(usr_cnt_sel[0]), .datab(usr_cnt_sel[1]), .datac(usr_cnt_sel[2]), .datad(usr_cnt_sel[3]), .datae(usr_cnt_sel[4]), .dataf(gnd), .combout(cnt_sel[2]));
+defparam lcell_cnt_sel_2.lut_mask = 64'hF0F0F0F0F0F0F0F0;
+defparam lcell_cnt_sel_2.dont_touch = "on";
+defparam lcell_cnt_sel_2.family = device_family;
+generic_lcell_comb lcell_cnt_sel_3 (.dataa(usr_cnt_sel[0]), .datab(usr_cnt_sel[1]), .datac(usr_cnt_sel[2]), .datad(usr_cnt_sel[3]), .datae(usr_cnt_sel[4]), .dataf(gnd), .combout(cnt_sel[3]));
+defparam lcell_cnt_sel_3.lut_mask = 64'hFF00FF00FF00FF00;
+defparam lcell_cnt_sel_3.dont_touch = "on";
+defparam lcell_cnt_sel_3.family = device_family;
+generic_lcell_comb lcell_cnt_sel_4 (.dataa(usr_cnt_sel[0]), .datab(usr_cnt_sel[1]), .datac(usr_cnt_sel[2]), .datad(usr_cnt_sel[3]), .datae(usr_cnt_sel[4]), .dataf(gnd), .combout(cnt_sel[4]));
+defparam lcell_cnt_sel_4.lut_mask = 64'hFFFF0000FFFF0000;
+defparam lcell_cnt_sel_4.dont_touch = "on";
+defparam lcell_cnt_sel_4.family = device_family;
+
+// the read strobe through the IP's cell
+wire        dprio_read_combout;
+generic_lcell_comb lcell_dprio_read (.dataa(fpll_1), .datab(dprio_read), .datac(1'b0), .datad(1'b0), .datae(1'b0), .dataf(1'b0), .combout(dprio_read_combout));
+defparam lcell_dprio_read.lut_mask = 64'hCCCCCCCCCCCCCCCC;
+defparam lcell_dprio_read.dont_touch = "on";
+defparam lcell_dprio_read.family = device_family;
+
 assign reconfig_to_pll[0]     = clk;                                   // dprio_clk
-assign reconfig_to_pll[1]     = ~init_reset;
-assign reconfig_to_pll[2]     = init_done ? dp_write : init_write;
-assign reconfig_to_pll[3]     = init_done ? dp_read  : 1'b0;
-assign reconfig_to_pll[9:4]   = init_done ? dp_addr  : init_addr;
-assign reconfig_to_pll[25:10] = init_done ? dp_data  : 16'd0;
-assign reconfig_to_pll[27:26] = init_done ? dp_be    : 2'b11;          // byte enables: both during the init, else per transaction
-assign reconfig_to_pll[28]    = ser_shift_load;
-assign reconfig_to_pll[29]    = mdio_dis;
-assign reconfig_to_pll[30]    = 1'b0;                                  // phase_en
-assign reconfig_to_pll[31]    = 1'b0;                                  // up_dn
-assign reconfig_to_pll[36:32] = 5'd0;                                  // cnt_sel
-assign reconfig_to_pll[37]    = 1'b0;                                  // scanen
-assign reconfig_to_pll[38]    = 1'b0;                                  // atpgmode
+assign reconfig_to_pll[1]     = ~dprio_init_reset;
+assign reconfig_to_pll[2]     = dprio_write;
+assign reconfig_to_pll[3]     = dprio_read_combout;
+assign reconfig_to_pll[9:4]   = dprio_address;
+assign reconfig_to_pll[25:10] = dprio_writedata;
+assign reconfig_to_pll[27:26] = dprio_byteen;
+assign reconfig_to_pll[28]    = dprio_ser_shift_load;
+assign reconfig_to_pll[29]    = dprio_mdio_dis;
+assign reconfig_to_pll[30]    = phase_en;
+assign reconfig_to_pll[31]    = up_dn;
+assign reconfig_to_pll[36:32] = cnt_sel;
+assign reconfig_to_pll[37]    = dprio_scanen;
+assign reconfig_to_pll[38]    = dprio_atpgmode;
 assign reconfig_to_pll[63:39] = 25'd0;
 
 endmodule
