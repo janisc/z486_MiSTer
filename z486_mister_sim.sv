@@ -487,6 +487,7 @@ system #(
 	.video_dot_rate      (),
 	.video_dot_slaved    (),
 	.dot_status          (8'd0),
+	.dot_status2         (8'd0),
 
 	.fdd_request         (fdd_request),
 	.ide0_request        (ide0_request),

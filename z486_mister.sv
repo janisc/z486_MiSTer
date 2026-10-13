@@ -807,7 +807,8 @@ system #(
 	.dotclk_valid        (dotclk_valid),
 	.video_dot_rate      (core_dot_rate),
 	.video_dot_slaved    (core_dot_slaved),
-	.dot_status          ({1'b0, dot_cfg_busy, core_dot_slaved, dot_cfg_rate, dotclk_valid, pll_dot_locked}),
+	.dot_status          ({out_running, dot_cfg_busy, core_dot_slaved, dot_cfg_rate, dotclk_valid, pll_dot_locked}),
+	.dot_status2         (out_resyncs),
 
 	.fdd_request         (mgmt_req[7:6]),
 	.ide0_request        (mgmt_req[2:0]),
@@ -1271,16 +1272,42 @@ video_freak video_freak
 	.SCALE              ({1'b0, status[46:45]})
 );
 
-assign CLK_VIDEO     = clk_sys;
-assign CE_PIXEL      = core_ce_pixel;
+assign CLK_VIDEO     = clk_dot;        // the dot-clock PLL: one pixel per cycle from the output stage below
+assign CE_PIXEL      = out_ce;
 assign VIDEO_ARX     = arx;
 assign VIDEO_ARY     = ary;
-assign VGA_R         = mt32_lcd ? {{2{mt32_lcd_pix}}, gamma_r[7:2]} : gamma_r;
-assign VGA_G         = mt32_lcd ? {{2{mt32_lcd_pix}}, gamma_g[7:2]} : gamma_g;
-assign VGA_B         = mt32_lcd ? {{2{mt32_lcd_pix}}, gamma_b[7:2]} : gamma_b;
-assign VGA_HS        = gamma_hs;
-assign VGA_VS        = gamma_vs;
-assign VGA_DE        = gamma_de;
+wire  [7:0] pre_r    = mt32_lcd ? {{2{mt32_lcd_pix}}, gamma_r[7:2]} : gamma_r;
+wire  [7:0] pre_g    = mt32_lcd ? {{2{mt32_lcd_pix}}, gamma_g[7:2]} : gamma_g;
+wire  [7:0] pre_b    = mt32_lcd ? {{2{mt32_lcd_pix}}, gamma_b[7:2]} : gamma_b;
+
+// Output stage (dot_resync.v): the raster re-timed to the dot clock. The renderer and
+// the helper blocks above run on the 85 MHz clock with the pixel enable; from here on
+// the framework's video clock is the PLL itself, one pixel per cycle (one per three
+// in the 24bpp mode, whose renderer enable is one per three dots), so the analog DAC
+// switches on dot boundaries and direct video is standard VGA timing. The TV raster
+// goes through a second FIFO of its own.
+wire        out_ce, out_hs, out_vs, out_de, out_running;
+wire [23:0] out_rgb;
+wire  [7:0] out_resyncs;
+wire        fb24_native = fb_native & fb_bpp[1];
+dot_resync #(.WIDTH(27)) dot_resync_main
+(
+	.wclk    (clk_sys),
+	.wce     (core_ce_pixel),
+	.wdata   ({pre_r, pre_g, pre_b, gamma_hs, gamma_vs, gamma_de}),
+	.rclk    (clk_dot),
+	.rdiv3   (fb24_native),
+	.rce     (out_ce),
+	.rdata   ({out_rgb, out_hs, out_vs, out_de}),
+	.running (out_running),
+	.resyncs (out_resyncs)
+);
+assign VGA_R         = out_rgb[23:16];
+assign VGA_G         = out_rgb[15:8];
+assign VGA_B         = out_rgb[7:0];
+assign VGA_HS        = out_hs;
+assign VGA_VS        = out_vs;
+assign VGA_DE        = out_de;
 assign VGA_F1        = 1'b0;
 assign VGA_SL        = 2'b00;
 assign VGA_DISABLE   = 1'b0;
@@ -1290,6 +1317,8 @@ assign VGA_DISABLE   = 1'b0;
 // played at half the dot rate). The scaler keeps the 31 kHz raster, so HDMI is
 // unchanged. Sync polarity on the port is fixed negative in that mode.
 
+wire  [7:0] alt_pre_r, alt_pre_g, alt_pre_b;
+wire        alt_pre_hs, alt_pre_vs, alt_pre_de;
 vga_tv15 #(.CLK_RATE(CLOCK_RATE_HZ)) vga_tv15
 (
 	.clk                (clk_sys),
@@ -1301,19 +1330,31 @@ vga_tv15 #(.CLK_RATE(CLOCK_RATE_HZ)) vga_tv15
 	.doublescan         (vga_doublescan),
 	.ilace_active       (tv_ilace),
 	.ce                 (core_ce_pixel),
-	.r                  (VGA_R),
-	.g                  (VGA_G),
-	.b                  (VGA_B),
+	.r                  (pre_r),
+	.g                  (pre_g),
+	.b                  (pre_b),
 	.hs                 (gamma_hs),
 	.vs                 (gamma_vs),
 	.de                 (gamma_de),
 	.alt_en             (VGA_ALT_EN),
-	.alt_r              (VGA_ALT_R),
-	.alt_g              (VGA_ALT_G),
-	.alt_b              (VGA_ALT_B),
-	.alt_hs             (VGA_ALT_HS),
-	.alt_vs             (VGA_ALT_VS),
-	.alt_de             (VGA_ALT_DE)
+	.alt_r              (alt_pre_r),
+	.alt_g              (alt_pre_g),
+	.alt_b              (alt_pre_b),
+	.alt_hs             (alt_pre_hs),
+	.alt_vs             (alt_pre_vs),
+	.alt_de             (alt_pre_de)
+);
+dot_resync #(.WIDTH(27)) dot_resync_alt
+(
+	.wclk    (clk_sys),
+	.wce     (core_ce_pixel),
+	.wdata   ({alt_pre_r, alt_pre_g, alt_pre_b, alt_pre_hs, alt_pre_vs, alt_pre_de}),
+	.rclk    (clk_dot),
+	.rdiv3   (fb24_native),
+	.rce     (),
+	.rdata   ({VGA_ALT_R, VGA_ALT_G, VGA_ALT_B, VGA_ALT_HS, VGA_ALT_VS, VGA_ALT_DE}),
+	.running (),
+	.resyncs ()
 );
 assign HDMI_FREEZE   = 1'b0;
 assign HDMI_BLACKOUT = 1'b0;

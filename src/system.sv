@@ -10,6 +10,7 @@ module system (
 	output  [2:0] video_dot_rate,    // dot-clock family the VGA mode wants (vga.v)
 	output        video_dot_slaved,  // the pixel enable follows the PLL
 	input   [7:0] dot_status,        // read at port 2D8h (test tools)
+	input   [7:0] dot_status2,       // port 2D9h: output-stage re-centrings
 
 	output [1:0]  fdd_request,
 	output [2:0]  ide0_request,
@@ -452,6 +453,7 @@ reg         debug_port_cs;
 reg         speedctl_cs;
 reg         fpu_cs;             // port F0h: clear the x87 error latch (IGNNE#)
 reg         dotstat_cs;         // port 2D8h: dot-clock PLL status (read only, test tools)
+reg         dotstat2_cs;        // port 2D9h: output-stage re-centring count
 wire        x87_ferr;           // z486 FERR#: unmasked x87 error pending
 reg         x87_ferr_d;
 reg         x87_ignne;
@@ -885,6 +887,7 @@ wire [7:0] iobus_readdata8 =
 	( joy_cs                                 ) ? joystick_readdata :
 	( vga_b_cs|vga_c_cs|vga_d_cs             ) ? vga_io_readdata   :
 	( dotstat_cs                             ) ? dot_status        :
+	( dotstat2_cs                            ) ? dot_status2       :
 	( debug_port_cs                          ) ? 8'hE9             :
 	                                             8'hFF;
 
@@ -978,6 +981,7 @@ always @(posedge clk_sys) begin
 		speedctl_cs   <= ({iobus_address_next[15:1], 1'b0} == 16'h8888);
 		fpu_cs        <= (iobus_address_next == 16'h00F0);
 		dotstat_cs    <= (iobus_address_next == 16'h02D8);
+		dotstat2_cs   <= (iobus_address_next == 16'h02D9);
 	end
 end
 
