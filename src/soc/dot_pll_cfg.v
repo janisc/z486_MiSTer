@@ -6,10 +6,9 @@
 // per request the six writes of the original table machine (waitrequest mode, N
 // bypassed, M = 18, K, C0 for counter 0 without bypass or odd division, start),
 // each when the core is not holding waitrequest, which it does until the DPRIO
-// sequence is through and the PLL has relocked. Then the C0 register is read back
-// at DPRIO 00h and 11h for the test tools (rb_c0a, rb_c0b): an Avalon read of the
-// core's register 20h fetches the DPRIO register whose address is on the write-data
-// lines, and the data arrive a few clocks later.
+// sequence is through and the PLL has relocked. The test ports rb_c0a / rb_c0b (the
+// C0 register read back at DPRIO 00h and 11h) are kept at zero: see the note in the
+// table machine.
 //
 // Three rewrites of the DPRIO sequence in own logic (builds 4 to 7 of 2026-10-13)
 // matched the core's bus cycle for cycle in simulation, landed in the PLL's
@@ -87,7 +86,7 @@ always @(posedge clk) begin
 		else if (!pending) busy <= 1'b0;
 	end
 	else if (!mgmt_waitrequest) begin
-		step <= (step == 5'd17) ? 5'd0 : step + 1'd1;
+		step <= (step == 5'd12) ? 5'd0 : step + 1'd1;
 		case (step)
 			5'd1:  begin mgmt_address <= MODE_REG;  mgmt_writedata <= 32'd0;                                   mgmt_write <= 1'b1; end   // waitrequest mode
 			5'd3:  begin mgmt_address <= N_REG;     mgmt_writedata <= 32'h0001_0000;                           mgmt_write <= 1'b1; end   // N bypassed (/1)
@@ -95,12 +94,10 @@ always @(posedge clk) begin
 			5'd7:  begin mgmt_address <= DSM_REG;   mgmt_writedata <= k_r;                                     mgmt_write <= 1'b1; end   // K
 			5'd9:  begin mgmt_address <= C_REG;     mgmt_writedata <= {14'd0, 2'b00, c0_hi_r, c0_lo_r};        mgmt_write <= 1'b1; end   // C0: counter 0, no bypass, no odd division
 			5'd11: begin mgmt_address <= START_REG; mgmt_writedata <= 32'd0;                                   mgmt_write <= 1'b1; end   // start: the core holds waitrequest until done and locked
-			// read back C0 under both maps: a read of register 20h with the DPRIO address on the write-data lines;
-			// the core presents the data in the one clock in which it drops waitrequest again (the next step here)
-			5'd13: begin mgmt_address <= ANY_DPRIO; mgmt_writedata <= 32'h0000_0000;                           mgmt_read  <= 1'b1; end
-			5'd14: rb_c0a <= mgmt_readdata[15:0];
-			5'd15: begin mgmt_address <= ANY_DPRIO; mgmt_writedata <= 32'h0000_0011;                           mgmt_read  <= 1'b1; end
-			5'd16: rb_c0b <= mgmt_readdata[15:0];
+			// No read-back here: builds 6 to 8 read the DPRIO registers back a few clocks after the last write,
+			// while the block was still shifting the new configuration into the PLL, and the PLL never took it;
+			// the core's own read path is only blocked while its state machine waits for lock, and it leaves
+			// that state at once if the PLL has not dropped lock yet. The test ports stay, at zero.
 			default: ;
 		endcase
 	end
