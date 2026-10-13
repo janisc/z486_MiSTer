@@ -10,11 +10,20 @@
 // dot-clock edge. Both rates come from the same PLL, so the fill level stays
 // where it started, around 16 of 64 entries, give or take the enable's jitter.
 //
-// Any lasting rate difference (the renderer still on its fractional divider
-// while the PLL reprograms at a mode switch, or a clock family change) runs the
-// FIFO empty or full; the read side then stops, drains or waits back to the
-// middle and restarts: a blank moment at a mode switch, and the resyncs counter
-// shows it happened.
+// While the renderer is not slaved to the PLL (hold = 1: the PLL reprograms at
+// a mode switch, or a geometry the PLL table has no rate for) the read side stops
+// and keeps itself in the middle behind the writer, so pixels flow again from a
+// centred FIFO as soon as the renderer follows the PLL: a blank moment at a mode
+// switch, like a real card's. If the FIFO ever runs empty or nearly full while
+// running (a rate difference that should not exist), the read side re-centres
+// the same way and counts it in resyncs.
+//
+// The pointers cross the clock boundary as Gray codes registered in their own
+// domain. A Gray code computed by logic from a binary counter shows other values
+// for a moment while the counter's bits settle, and the other clock, which shares
+// the PLL reference and therefore samples at the same phases line after line,
+// picked up those moments as wrong fill levels: dropped pixels and ragged line
+// starts on the CRT in some clock families (build 2 of 2026-10-13).
 //
 // The storage is written in one always block and read, unconditionally, in
 // another, the form Quartus infers a dual-clock RAM block from (the read
@@ -27,6 +36,7 @@ module dot_resync #(parameter WIDTH = 27)
 
 	input                  rclk,     // the dot clock
 	input                  rdiv3,    // 1: one pixel per three rclk cycles (24bpp); quasi-static
+	input                  hold,     // wclk domain: the renderer is not slaved to the dot clock, stop and stay centred
 	output reg             rce,      // a pixel was put on rdata this cycle
 	output     [WIDTH-1:0] rdata,
 	output reg             running,  // 1 while pixels flow, 0 while re-centring
@@ -34,6 +44,11 @@ module dot_resync #(parameter WIDTH = 27)
 );
 
 localparam AW = 6;                  // 64 entries
+
+function [AW:0] bin2gray;
+	input [AW:0] b;
+	bin2gray = b ^ (b >> 1);
+endfunction
 
 function [AW:0] gray2bin;
 	input [AW:0] g;
@@ -48,12 +63,15 @@ endfunction
 
 // ---- write side
 reg  [AW:0] wptr = 0;
-wire [AW:0] wptr_g = wptr ^ (wptr >> 1);
-reg  [AW:0] rptr_g_w1 = 0, rptr_g_w2 = 0;
+reg  [AW:0] wptr_g = 0;             // wptr's Gray code, registered together with it
+(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
+reg  [AW:0] rptr_g_w1 = 0;
+reg  [AW:0] rptr_g_w2 = 0;
 wire [AW:0] rptr_w = gray2bin(rptr_g_w2);
 wire [AW:0] wocc = wptr - rptr_w;
 wire        wfull = (wocc >= 7'd60);
 wire        wen = wce && !wfull;
+wire [AW:0] wptr_n = wptr + 1'd1;
 
 always @(posedge wclk) begin
 	if (wen) mem[wptr[AW-1:0]] <= wdata;
@@ -62,17 +80,27 @@ end
 always @(posedge wclk) begin
 	rptr_g_w1 <= rptr_g;
 	rptr_g_w2 <= rptr_g_w1;
-	if (wen) wptr <= wptr + 1'd1;
+	if (wen) begin
+		wptr   <= wptr_n;
+		wptr_g <= bin2gray(wptr_n);
+	end
 end
 
 // ---- read side
 reg  [AW:0] rptr = 0;
-wire [AW:0] rptr_g = rptr ^ (rptr >> 1);
-reg  [AW:0] wptr_g_r1 = 0, wptr_g_r2 = 0;
+reg  [AW:0] rptr_g = 0;             // rptr's Gray code, registered together with it
+(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
+reg  [AW:0] wptr_g_r1 = 0;
+reg  [AW:0] wptr_g_r2 = 0;
 wire [AW:0] wptr_r = gray2bin(wptr_g_r2);
 wire [AW:0] occ = wptr_r - rptr;
+wire [AW:0] rptr_n = rptr + 1'd1;
+wire [AW:0] rptr_c = wptr_r - 7'd16; // the middle: 16 entries behind the writer
 reg   [1:0] div = 0;
 reg [WIDTH-1:0] rdata_q;
+(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
+reg         hold_r1 = 0;
+reg         hold_r2 = 0;
 
 always @(posedge rclk) begin
 	rdata_q <= mem[rptr[AW-1:0]];
@@ -88,20 +116,31 @@ end
 always @(posedge rclk) begin
 	wptr_g_r1 <= wptr_g;
 	wptr_g_r2 <= wptr_g_r1;
+	hold_r1   <= hold;
+	hold_r2   <= hold_r1;
 	rce <= 1'b0;
-	if (!running) begin
-		// re-centre on 16: drain two a cycle when overfull, wait when underfull
-		if (occ > 7'd20)      rptr <= rptr + 2'd2;
-		else if (occ >= 7'd12) begin running <= 1'b1; div <= 2'd0; end
+	if (!running || hold_r2) begin
+		// re-centre on 16: jump back behind the writer when overfull, wait when underfull
+		running <= 1'b0;
+		if (occ > 7'd20) begin
+			rptr   <= rptr_c;
+			rptr_g <= bin2gray(rptr_c);
+		end
+		else if (occ >= 7'd12 && !hold_r2) begin
+			running <= 1'b1;
+			div     <= 2'd0;
+		end
 	end
-	else if (occ == 0) begin
+	else if (occ == 0 || occ >= 7'd56) begin
+		// ran empty (the writer stalled) or nearly full (the writer is faster): re-centre
 		running <= 1'b0;
 		resyncs <= resyncs + 1'd1;
 	end
 	else if (!rdiv3 || div == 2'd2) begin
-		rptr <= rptr + 1'd1;
-		rce  <= 1'b1;
-		div  <= 2'd0;
+		rptr   <= rptr_n;
+		rptr_g <= bin2gray(rptr_n);
+		rce    <= 1'b1;
+		div    <= 2'd0;
 	end
 	else div <= div + 1'd1;
 end

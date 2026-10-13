@@ -1269,8 +1269,10 @@ wire  [7:0] pre_b    = mt32_lcd ? {{2{mt32_lcd_pix}}, gamma_b[7:2]} : gamma_b;
 // the helper blocks above run on the 85 MHz clock with the pixel enable; from here on
 // the framework's video clock is the PLL itself, one pixel per cycle (one per three
 // in the 24bpp mode, whose renderer enable is one per three dots), so the analog DAC
-// switches on dot boundaries and direct video is standard VGA timing. The TV raster
-// goes through a second FIFO of its own.
+// switches on dot boundaries and direct video is standard VGA timing. While the
+// renderer is not slaved to the PLL (a mode switch) the FIFOs hold, centred, and the
+// outputs stand still, like a real card's between modes. The TV raster goes through
+// a second FIFO of its own.
 wire        out_ce, out_hs, out_vs, out_de, out_running;
 wire [23:0] out_rgb;
 wire  [7:0] out_resyncs;
@@ -1282,6 +1284,7 @@ dot_resync #(.WIDTH(27)) dot_resync_main
 	.wdata   ({pre_r, pre_g, pre_b, gamma_hs, gamma_vs, gamma_de}),
 	.rclk    (clk_dot),
 	.rdiv3   (fb24_native),
+	.hold    (~core_dot_slaved),
 	.rce     (out_ce),
 	.rdata   ({out_rgb, out_hs, out_vs, out_de}),
 	.running (out_running),
@@ -1336,6 +1339,7 @@ dot_resync #(.WIDTH(27)) dot_resync_alt
 	.wdata   ({alt_pre_r, alt_pre_g, alt_pre_b, alt_pre_hs, alt_pre_vs, alt_pre_de}),
 	.rclk    (clk_dot),
 	.rdiv3   (fb24_native),
+	.hold    (~core_dot_slaved),
 	.rce     (),
 	.rdata   ({VGA_ALT_R, VGA_ALT_G, VGA_ALT_B, VGA_ALT_HS, VGA_ALT_VS, VGA_ALT_DE}),
 	.running (),
