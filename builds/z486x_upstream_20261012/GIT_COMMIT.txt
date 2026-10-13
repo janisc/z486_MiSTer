@@ -1,1 +1,1 @@
-d8eb836ae2a87c601f492ece6927d0cfb0045d72 Merge upstream 20261012: build 1 (direct, fitter seed 6): 39,156 ALMs = 93 %, 497 M10K, clk_sys -6.198 / TNS -27801, pll_hdmi +0.248, hold clean
+d7133fde609742523065010bffb24f619966dc84 Merge upstream 20261012 (build 2 = fitter seed 37 of the sweep of 2026-10-12/13, 44 seeds, 3 processors a job: 39,136 ALMs = 93 %, clk_sys -5.718 / TNS -25958, pll_hdmi +0.167, hold clean; build 1 was the direct build with seed 6: 39,156 ALMs, -6.198 / -27801 / +0.248)
