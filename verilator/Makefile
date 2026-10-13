@@ -41,7 +41,7 @@ SOURCES = $(EXTRA_SOURCES) \
 		  $(D)/iobus_adapter.sv $(D)/pic_inta_bridge.sv \
 		  $(D)/memory/main_memory.sv $(D)/memory/split_sdram_backend.sv $(DZ)/memory.sv $(DZ)/bus_unit.sv $(DZ)/cache_unit.sv $(DZ)/l1_cache.sv $(DZ)/l1_icache.sv $(D)/memory/sdram_sim.v \
 		  $(D)/soc/dma.v $(D)/soc/cdda.v $(D)/soc/floppy.v $(D)/soc/ide.v $(D)/soc/pic.v $(D)/soc/pit_counter.v $(D)/soc/joystick.v \
-		  $(D)/soc/pit.v $(D)/soc/ps2.v $(D)/soc/rtc.v $(D)/soc/vga.v $(D)/soc/dotclk_ce.v $(D)/soc/dot_resync.v $(D)/soc/svga_linebuf.sv \
+		  $(D)/soc/pit.v $(D)/soc/ps2.v $(D)/soc/rtc.v $(D)/soc/vga.v $(D)/soc/dotclk_ce.v $(D)/soc/dot_resync.v $(D)/soc/dot_pll_cfg.v $(D)/soc/svga_linebuf.sv \
 		  $(D)/common/dpram.v $(D)/common/simple_ram.v $(D)/common/simple_fifo.v $(D)/common/async_fifo.v \
 		  $(D)/common/ps2_device.v $(D)/common/simple_mult.v $(D)/common/uart_tx_V2.v $(D)/common/synchronizer.sv \
 		  $(D)/common/cdc_vector_handshake_continuous.sv \

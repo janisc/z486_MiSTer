@@ -497,26 +497,23 @@ pll pll
 	.locked   (pll_locked)
 );
 
-// Dot-clock PLL (rtl/pll_video.v): a fractional PLL, reprogrammed through the
-// framework's reconfiguration wrapper whenever the VGA block asks for another
-// clock family. Entries: the fractional part of M (address 7) and C0; M's integer
-// part is 18 for every entry and N is bypassed. Rates are the ET4000 clocks nudged
-// by at most 0.03 % so that a raster line is a whole number of 85 MHz cycles (2701
-// for the VGA crystals): the 85 MHz-quantised output then repeats the same pattern
-// on every line, which the hsync restart in vga.v used to force. vga.v follows the
-// PLL (dotclk_valid) only once it has locked on the wanted family and settled.
+// Dot-clock PLL (rtl/pll_video.v): a fractional PLL, reprogrammed whenever the VGA
+// block asks for another clock family. dot_pll_cfg speaks the PLL's DPRIO interface
+// directly (the framework's altera_pll_reconfig IP does the same in 1,509 ALMs):
+// per family the fractional part of M and the output counter C0 (M's integer part is
+// 18 for every entry, N is bypassed, the counters divide the VCO itself). Rates are
+// the ET4000 clocks nudged by at most 0.03 % so that a raster line is a whole number
+// of 85 MHz cycles (2701 for the VGA crystals). vga.v follows the PLL (dotclk_valid)
+// only once it has locked on the wanted family and settled.
 wire        clk_dot;
 wire        pll_dot_locked;
 wire  [2:0] core_dot_rate;
 wire        core_dot_slaved;
 reg         dotclk_valid = 0;
 reg   [2:0] dot_cfg_rate = 3'd1;      // the PLL's power-up setting is the 28.322 MHz family
-reg         dot_cfg_busy = 0;
+reg         dot_cfg_req = 0;
+wire        dot_cfg_busy, dot_cfg_ready;
 wire [63:0] dpll_reconfig_to, dpll_reconfig_from;
-wire        dpll_cfg_waitrequest;
-reg         dpll_cfg_write = 0;
-reg   [5:0] dpll_cfg_address = 0;
-reg  [31:0] dpll_cfg_data = 0;
 
 pll_video pll_video
 (
@@ -529,21 +526,7 @@ pll_video pll_video
 	.reconfig_from_pll (dpll_reconfig_from)
 );
 
-pll_cfg dpll_cfg
-(
-	.mgmt_clk          (CLK_50M),
-	.mgmt_reset        (1'b0),
-	.mgmt_waitrequest  (dpll_cfg_waitrequest),
-	.mgmt_read         (1'b0),
-	.mgmt_readdata     (),
-	.mgmt_write        (dpll_cfg_write),
-	.mgmt_address      (dpll_cfg_address),
-	.mgmt_writedata    (dpll_cfg_data),
-	.reconfig_to_pll   (dpll_reconfig_to),
-	.reconfig_from_pll (dpll_reconfig_from)
-);
-
-// M fraction and C0 per family (VCO = 50 MHz x 18.frac, divided by C0 by the output counter)
+// M fraction and C0 (half count, even dividers) per family: VCO = 50 MHz x 18.frac, / C0
 function [31:0] dot_m_frac;         // 0: 25.175861  1: 28.322843  2: 32.518160  3: 35.892784  4: 64.985607  5: 75.024065 MHz
 	input [2:0] r;
 	case(r)
@@ -554,56 +537,58 @@ function [31:0] dot_m_frac;         // 0: 25.175861  1: 28.322843  2: 32.518160 
 		default:    dot_m_frac = 32'd24806179;
 	endcase
 endfunction
-function [31:0] dot_c0;             // {odd[17], high[15:8], low[7:0]}: /36, /32, /28, /26, /14, /12 of the VCO
+function [7:0] dot_c0_half;         // C0 = /36, /32, /28, /26, /14, /12 of the VCO
 	input [2:0] r;
 	case(r)
-		3'd0:    dot_c0 = 32'h0000_1212;
-		3'd1:    dot_c0 = 32'h0000_1010;
-		3'd2:    dot_c0 = 32'h0000_0E0E;
-		3'd3:    dot_c0 = 32'h0000_0D0D;
-		3'd4:    dot_c0 = 32'h0000_0707;
-		default: dot_c0 = 32'h0000_0606;
+		3'd0:    dot_c0_half = 8'd18;
+		3'd1:    dot_c0_half = 8'd16;
+		3'd2:    dot_c0_half = 8'd14;
+		3'd3:    dot_c0_half = 8'd13;
+		3'd4:    dot_c0_half = 8'd7;
+		default: dot_c0_half = 8'd6;
 	endcase
 endfunction
 
+dot_pll_cfg dpll_cfg
+(
+	.clk               (CLK_50M),
+	.req               (dot_cfg_req),
+	.c0_hi             (dot_c0_half(dot_cfg_rate)),
+	.c0_lo             (dot_c0_half(dot_cfg_rate)),
+	.m_frac            (dot_m_frac(dot_cfg_rate)),
+	.busy              (dot_cfg_busy),
+	.ready             (dot_cfg_ready),
+	.locked            (),
+	.reconfig_to_pll   (dpll_reconfig_to),
+	.reconfig_from_pll (dpll_reconfig_from)
+);
+
 always @(posedge CLK_50M) begin
 	reg  [2:0] rate_s1 = 3'd1, rate_s2 = 3'd1, rate_s3 = 3'd1;
-	reg  [3:0] state = 0;
 	reg        init_done = 0;
+	reg  [2:0] req_cnt = 0;
 	reg [15:0] settle = 16'd50000;
 
 	rate_s1 <= core_dot_rate;          // clk_sys -> CLK_50M, quasi-static: act on a stable value only
 	rate_s2 <= rate_s1;
 	rate_s3 <= rate_s2;
-	dpll_cfg_write <= 0;
 
-	if(!state && pll_dot_locked && rate_s3 == rate_s2 && (!init_done || rate_s3 != dot_cfg_rate)) begin
+	// a request: once after power-up, then at every change of family; the driver takes it when idle
+	if (req_cnt) req_cnt <= req_cnt - 1'd1;
+	dot_cfg_req <= |req_cnt;
+	if(dot_cfg_ready && !dot_cfg_busy && !req_cnt && pll_dot_locked && rate_s3 == rate_s2 && (!init_done || rate_s3 != dot_cfg_rate)) begin
 		dot_cfg_rate <= rate_s3;
 		init_done    <= 1;
-		dot_cfg_busy <= 1;
-		state        <= 1;
-	end
-
-	if(state && !dpll_cfg_waitrequest) begin
-		state <= state + 1'd1;
-		case(state)
-			 1: begin dpll_cfg_address <= 6'd0; dpll_cfg_data <= 32'd0;                   dpll_cfg_write <= 1; end // waitrequest mode
-			 3: begin dpll_cfg_address <= 6'd3; dpll_cfg_data <= 32'h0001_0000;           dpll_cfg_write <= 1; end // N: bypass (/1)
-			 5: begin dpll_cfg_address <= 6'd4; dpll_cfg_data <= 32'h0000_0909;           dpll_cfg_write <= 1; end // M: 18 (9+9)
-			 7: begin dpll_cfg_address <= 6'd7; dpll_cfg_data <= dot_m_frac(dot_cfg_rate); dpll_cfg_write <= 1; end // M fraction
-			 9: begin dpll_cfg_address <= 6'd5; dpll_cfg_data <= dot_c0(dot_cfg_rate);     dpll_cfg_write <= 1; end // C0
-			11: begin dpll_cfg_address <= 6'd2; dpll_cfg_data <= 32'd0;                   dpll_cfg_write <= 1; end // start
-			13: begin state <= 0; dot_cfg_busy <= 0; end
-		endcase
+		req_cnt      <= 3'd4;
 	end
 
 	// follow the PLL about a millisecond after it has locked on the programmed family
-	if(!pll_dot_locked || dot_cfg_busy) begin
+	if(!pll_dot_locked || dot_cfg_busy || req_cnt) begin
 		settle       <= 16'd50000;
 		dotclk_valid <= 0;
 	end
 	else if(settle) settle <= settle - 1'd1;
-	else dotclk_valid <= (dot_cfg_rate == rate_s3);
+	else dotclk_valid <= init_done && (dot_cfg_rate == rate_s3);
 end
 
 always @(posedge clk_sys or posedge reset_async) begin
