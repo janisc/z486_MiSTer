@@ -153,7 +153,8 @@ carries the real timing, and `16/24bit mode` and `16bit format`, which asked the
 user to guess the pixel format of the hi-colour modes. Added are `Analog output`
 and `Gravis UltraSound`. The emulated RAMDAC now has the command register
 the BIOS and the Windows driver program, so the format is whatever they set, as on
-a real card. `Border` stays and applies to both outputs. The aim was to remove
+a real card. `Border` stays and applies to both outputs; since release 13 it is off by
+default, as upstream and ao486 have it. The aim was to remove
 combinations that did not make sense, not functionality; if something you need is
 missing, open an issue.
 
@@ -169,23 +170,36 @@ Desktop Adventures run; with the Gravis UltraSound, Second Reality, Legend and
 Demoded. Release 12 (z486 20261006) was spot-checked rather than run through the
 list: Alone in the Dark 2, Crusader: No Regret and Second Reality with the Sound
 Blaster run now, Beneath a Steel Sky with `RAM Size` at 16 MB, and the titles tried
-from the list ran as before. The test tools (register dumps, retrace counters, VRAM banking, a resident
+from the list ran as before. Release 13 (z486 20261012) got an automatic boot check
+instead of the list: a script loads launcher after launcher from a 349-title collection
+and photographs the screen until it holds still. Of the first 37, all started except
+Aladdin (an XMS allocation error, the same on the stock core) and Apache (its disk image had
+its drivers commented out; with that repaired it page-faults on every z486, stock included,
+while ao486 runs it, a matter for upstream). The usual list of games was then launched by
+hand on the release binary. The test tools (register dumps, retrace counters, VRAM banking, a resident
 INT 10h logger, the GUS memory tests) and the debug floppy are described in
 [`builds/BUILDS.md`](builds/BUILDS.md).
 
 **Which z486 is this built on, and what is known not to work?**
-Release 12 is built on z486 20261006, whose CPU brought protection and fault fixes
-for Windows 95 and games. With it the two faults of release 11 are gone: Second
-Reality plays through with the Sound Blaster, and Alone in the Dark 2 draws its text
-right; Crusader: No Regret, which rebooted in a loop on every z486 so far, runs as
-well. Beneath a Steel Sky runs with `RAM Size` at 16 MB; with more memory it ends in
-a General Protection Fault, a known matter noted in upstream's release notes. Two
-upstream changes to know about: the Hardware
-page of the OSD has switches for the CPU's fast paths, L1 cache and x87 (`CPU
-Pipeline: Compatible` is the one to try when a program misbehaves), and the `RAM
-Size` option was reordered so that a fresh configuration gives 64 MB; an existing
-`Z486.CFG` that said 16 MB reads 64 MB now, set it again if you want 16. The fork's
-own limits are in the entry below.
+Release 13 is built on z486 20261012; everything new in it is upstream's work. The
+CPU gained real x87 transcendentals (FSINCOS, FPREM1, FXTRACT and FYL2XP1 were no-ops
+before), FST ST(i), FFREEP and FBLD, hardware breakpoints, a faster memory path and a
+set of game fixes (SHLD/SHRD with 16-bit operands, the TSS access flag, MOV to the
+debug registers, the AC flag on interrupt entry). Around it: critical-word-first SDRAM
+bursts, one-cycle chain-4 dword writes to the VGA, the SVGA linear framebuffer at
+248 MB where UniVBE looks for it, coprocessor errors on IRQ 13 with IGNNE# at port
+F0h (made for Wolfenstein 3D's FPU check under EMM386), no CMOS coprocessor with the
+x87 switched off, and two more joystick types (CH Flightstick Pro, Thrustmaster FCS).
+Known from release 12 and not retested: Beneath a Steel Sky wants `RAM Size` at
+16 MB; with more memory it ended in a General Protection Fault, a matter noted in
+upstream's release notes. Four settings read differently after this release, because
+their bits moved or changed meaning: `Analog output`, the `TV` options and `Gravis
+UltraSound` come back at their defaults (VGA 31 kHz, GUS off), and `Border` is off by
+default now, so a saved `No` shows as `Yes` once; set them again, the rest of
+`Z486.CFG` is kept. Still there from release 12: the Hardware page's switches for the
+CPU's fast paths, L1 cache and x87 (`CPU Pipeline: Compatible` is the one to try when
+a program misbehaves) and the `RAM Size` order that gives a fresh configuration
+64 MB. The fork's own limits are in the entry below.
 
 **Which modes do not work on the CRT?**
 A full VBETEST sweep of every VBE mode found these limits. 1280x1024 loses the CRT: this
@@ -216,8 +230,8 @@ The builds are named `z486nv_<date>` (nv for native video) so they sit next to t
 stock `z486_<date>.rbf` in `_Computer`; load whichever you want. Both report the same
 core name to MiSTer, so they share `config/Z486.CFG` (OSD settings, boot order, the
 mounted images), the `games/Z486` folder and the `[z486]` section of MiSTer.ini. The
-OSD's bottom line shows `nv-yymmdd` on this fork and nothing on the stock core, which
-is how you tell which one is loaded.
+OSD's bottom line shows `nv-yymmdd` on this fork and, from z486 20261012 on, `vyymmdd`
+on the stock core, which is how you tell which one is loaded.
 
 ## How it works
 
