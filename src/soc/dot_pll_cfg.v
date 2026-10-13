@@ -1,8 +1,8 @@
 // dot_pll_cfg: the dot-clock PLL's reconfiguration (rtl/pll_video.v).
 //
-// The framework's altera_pll_reconfig core does the DPRIO work, in a private copy
-// trimmed to one output counter (rtl/dot_pll_reconfig_core.v: number_of_counters = 1,
-// nothing else changed), driven over its Avalon slave by the table machine below:
+// The framework's altera_pll_reconfig IP (sys/pll_cfg, untouched: a copy trimmed to
+// one output counter did not reconfigure the PLL on the card either, build 9 of
+// 2026-10-13) does the DPRIO work, driven over its Avalon slave by the table machine below:
 // per request the six writes of the original table machine (waitrequest mode, N
 // bypassed, M = 18, K, C0 for counter 0 without bypass or odd division, start),
 // each when the core is not holding waitrequest, which it does until the DPRIO
@@ -38,7 +38,7 @@ reg         mgmt_read  = 1'b0;
 reg   [5:0] mgmt_address = 6'd0;
 reg  [31:0] mgmt_writedata = 32'd0;
 
-dot_pll_reconfig_core core
+pll_cfg core                           // the framework's reconfiguration IP, untouched (sys/pll_cfg)
 (
 	.mgmt_clk          (clk),
 	.mgmt_reset        (1'b0),
