@@ -15,6 +15,10 @@
 // FIFO empty or full; the read side then stops, drains or waits back to the
 // middle and restarts: a blank moment at a mode switch, and the resyncs counter
 // shows it happened.
+//
+// The storage is written in one always block and read, unconditionally, in
+// another, the form Quartus infers a dual-clock RAM block from (the read
+// pointer's entry is never written, so the continuous read holds its value).
 module dot_resync #(parameter WIDTH = 27)
 (
 	input                  wclk,     // the renderer's clock
@@ -24,7 +28,7 @@ module dot_resync #(parameter WIDTH = 27)
 	input                  rclk,     // the dot clock
 	input                  rdiv3,    // 1: one pixel per three rclk cycles (24bpp); quasi-static
 	output reg             rce,      // a pixel was put on rdata this cycle
-	output reg [WIDTH-1:0] rdata,
+	output     [WIDTH-1:0] rdata,
 	output reg             running,  // 1 while pixels flow, 0 while re-centring
 	output reg       [7:0] resyncs   // re-centrings so far (rclk domain)
 );
@@ -40,7 +44,7 @@ function [AW:0] gray2bin;
 	end
 endfunction
 
-reg [WIDTH-1:0] mem [0:(1 << AW) - 1];
+(* ramstyle = "M10K" *) reg [WIDTH-1:0] mem [0:(1 << AW) - 1];
 
 // ---- write side
 reg  [AW:0] wptr = 0;
@@ -49,14 +53,16 @@ reg  [AW:0] rptr_g_w1 = 0, rptr_g_w2 = 0;
 wire [AW:0] rptr_w = gray2bin(rptr_g_w2);
 wire [AW:0] wocc = wptr - rptr_w;
 wire        wfull = (wocc >= 7'd60);
+wire        wen = wce && !wfull;
+
+always @(posedge wclk) begin
+	if (wen) mem[wptr[AW-1:0]] <= wdata;
+end
 
 always @(posedge wclk) begin
 	rptr_g_w1 <= rptr_g;
 	rptr_g_w2 <= rptr_g_w1;
-	if (wce && !wfull) begin
-		mem[wptr[AW-1:0]] <= wdata;
-		wptr <= wptr + 1'd1;
-	end
+	if (wen) wptr <= wptr + 1'd1;
 end
 
 // ---- read side
@@ -66,6 +72,12 @@ reg  [AW:0] wptr_g_r1 = 0, wptr_g_r2 = 0;
 wire [AW:0] wptr_r = gray2bin(wptr_g_r2);
 wire [AW:0] occ = wptr_r - rptr;
 reg   [1:0] div = 0;
+reg [WIDTH-1:0] rdata_q;
+
+always @(posedge rclk) begin
+	rdata_q <= mem[rptr[AW-1:0]];
+end
+assign rdata = rdata_q;
 
 initial begin
 	running = 0;
@@ -87,10 +99,9 @@ always @(posedge rclk) begin
 		resyncs <= resyncs + 1'd1;
 	end
 	else if (!rdiv3 || div == 2'd2) begin
-		rdata <= mem[rptr[AW-1:0]];
-		rptr  <= rptr + 1'd1;
-		rce   <= 1'b1;
-		div   <= 2'd0;
+		rptr <= rptr + 1'd1;
+		rce  <= 1'b1;
+		div  <= 2'd0;
 	end
 	else div <= div + 1'd1;
 end

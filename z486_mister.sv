@@ -543,7 +543,7 @@ pll_cfg dpll_cfg
 	.reconfig_from_pll (dpll_reconfig_from)
 );
 
-// M fraction and C0 per family (see the table in docs; VCO = 50 MHz x 18.frac, /2, /C0)
+// M fraction and C0 per family (VCO = 50 MHz x 18.frac, divided by C0 by the output counter)
 function [31:0] dot_m_frac;         // 0: 25.175861  1: 28.322843  2: 32.518160  3: 35.892784  4: 64.985607  5: 75.024065 MHz
 	input [2:0] r;
 	case(r)
@@ -554,15 +554,15 @@ function [31:0] dot_m_frac;         // 0: 25.175861  1: 28.322843  2: 32.518160 
 		default:    dot_m_frac = 32'd24806179;
 	endcase
 endfunction
-function [31:0] dot_c0;             // {odd[17], high[15:8], low[7:0]}: /18, /16, /14, /13, /7, /6
+function [31:0] dot_c0;             // {odd[17], high[15:8], low[7:0]}: /36, /32, /28, /26, /14, /12 of the VCO
 	input [2:0] r;
 	case(r)
-		3'd0:    dot_c0 = 32'h0000_0909;
-		3'd1:    dot_c0 = 32'h0000_0808;
-		3'd2:    dot_c0 = 32'h0000_0707;
-		3'd3:    dot_c0 = 32'h0002_0706;
-		3'd4:    dot_c0 = 32'h0002_0403;
-		default: dot_c0 = 32'h0000_0303;
+		3'd0:    dot_c0 = 32'h0000_1212;
+		3'd1:    dot_c0 = 32'h0000_1010;
+		3'd2:    dot_c0 = 32'h0000_0E0E;
+		3'd3:    dot_c0 = 32'h0000_0D0D;
+		3'd4:    dot_c0 = 32'h0000_0707;
+		default: dot_c0 = 32'h0000_0606;
 	endcase
 endfunction
 

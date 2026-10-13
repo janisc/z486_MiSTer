@@ -1,7 +1,8 @@
 // VGA dot-clock PLL (reconfigurable). Fractional VCO at 906.331 MHz (M = 18.126620),
-// post-divided by 2 to 453.1655 MHz for the output counters:
-//   C0 = /16 -> 28.322843 MHz (720-dot text family, the power-up setting)
-//   C0 = /18 -> 25.175861 MHz (640-dot modes)
+// the output counters divide the VCO itself (the pll_vco_div parameter does not
+// halve what they see: build 1 of 2026-10-13 ran at twice the rate with /16, /18):
+//   C0 = /32 -> 28.322843 MHz (720-dot text family, the power-up setting)
+//   C0 = /36 -> 25.175861 MHz (640-dot modes)
 // The top level (z486_mister.sv) reprograms M's fraction and C0 through the
 // reconfiguration port for every family the VGA block asks for (25.175, 28.322,
 // 32.5, 35.9, 65 MHz and the 24bpp rate), each nudged by at most 0.03 % so that a
@@ -105,15 +106,15 @@ module pll_video(
 		.n_cnt_bypass_en("true"),
 		.m_cnt_odd_div_duty_en("false"),
 		.n_cnt_odd_div_duty_en("false"),
-		.c_cnt_hi_div0(8),
-		.c_cnt_lo_div0(8),
+		.c_cnt_hi_div0(16),
+		.c_cnt_lo_div0(16),
 		.c_cnt_prst0(1),
 		.c_cnt_ph_mux_prst0(0),
 		.c_cnt_in_src0("ph_mux_clk"),
 		.c_cnt_bypass_en0("false"),
 		.c_cnt_odd_div_duty_en0("false"),
-		.c_cnt_hi_div1(9),
-		.c_cnt_lo_div1(9),
+		.c_cnt_hi_div1(18),
+		.c_cnt_lo_div1(18),
 		.c_cnt_prst1(1),
 		.c_cnt_ph_mux_prst1(0),
 		.c_cnt_in_src1("ph_mux_clk"),
