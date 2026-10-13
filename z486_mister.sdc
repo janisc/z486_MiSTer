@@ -15,3 +15,7 @@ set_false_path -from [get_registers {*boot_done*}]
 # cones across most sweep seeds.  Cut it so STA ranks on real datapaths.
 set_false_path -through [get_nets {*seg_unit|Add0*}] \
                -through [get_nets {*early_rd_present*}]
+
+# The dot-clock PLL (rtl/pll_video.v) is asynchronous to everything else: its only
+# crossing is the Gray-coded counter in dotclk_ce.v, synchronized in clk_sys.
+set_clock_groups -asynchronous -group [get_clocks {*pll_video*}]

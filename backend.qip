@@ -34,6 +34,7 @@ set_global_assignment -name VERILOG_FILE src/soc/rtc.v
 set_global_assignment -name VERILOG_FILE src/soc/vga.v
 set_global_assignment -name SYSTEMVERILOG_FILE src/soc/svga_linebuf.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/soc/vga_tv15.sv
+set_global_assignment -name VERILOG_FILE src/soc/dotclk_ce.v
 set_global_assignment -name QIP_FILE src/soc/sound/sound.qip
 set_global_assignment -name VERILOG_FILE src/soc/sound/gus/gf1.v
 set_global_assignment -name VERILOG_FILE src/soc/sound/gus/gus_spram.v

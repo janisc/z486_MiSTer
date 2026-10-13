@@ -194,6 +194,10 @@ module vga #(
 
 	input               clk_vga,
 	input      [27:0]   clock_rate_vga,
+	input               dotclk,            // the dot-clock PLL (asynchronous to clk_vga)
+	input               dotclk_valid,      // 1: dotclk runs at the rate vga_dot_rate asks for, settled
+	output reg  [2:0]   vga_dot_rate,      // dot-clock family this mode wants: 0 25.175, 1 28.322, 2 32.5, 3 35.9, 4 65 MHz, 5 the 24bpp rate
+	output              vga_dot_slaved,    // 1: the pixel enable follows dotclk (0: the fractional divider of clk_vga)
 
 	//vga
 	output              vga_ce,
@@ -723,7 +727,9 @@ wire vga_rst_n = vga_rst_n_reg;
 reg [27:0] clk_rate;
 always @(posedge clk_vga) clk_rate <= clock_rate_vga;
 
-reg ce_video;
+reg ce_frac;                 // the fractional divider's enable (the fallback)
+wire ce_dot;                 // the dot-clock PLL's enable (dotclk_ce)
+wire ce_video;
 reg [27:0] pixclk;
 reg [27:0] ce_video_sum;
 // The dot clock is a fractional divider of clk_vga, so a few pixels per line are
@@ -737,11 +743,11 @@ reg hs_line_lock;
 always @(posedge clk_vga) begin
 	if(~vga_rst_n) begin
 		ce_video_sum <= 28'd0;
-		ce_video <= 1'b0;
+		ce_frac <= 1'b0;
 		hs_line_lock <= 1'b0;
 	end
 	else begin
-		ce_video <= 1'b0;
+		ce_frac <= 1'b0;
 		hs_line_lock <= vga_horiz_sync;
 		// Reset on the sync start edge only (active level = ~general_hsync): with the
 		// two-character sync delay the sync end can fall inside the visible line.
@@ -750,7 +756,7 @@ always @(posedge clk_vga) begin
 		end
 		else if(ce_video_sum + pixclk >= clk_rate) begin
 			ce_video_sum <= ce_video_sum + pixclk - clk_rate;
-			ce_video <= 1'b1;
+			ce_frac <= 1'b1;
 		end
 		else begin
 			ce_video_sum <= ce_video_sum + pixclk;
@@ -803,6 +809,26 @@ always @(posedge clk_vga) begin
 		else if(pix60>clk_rate) pixclk <= clk_rate;
 		else pixclk <= pix60[27:0];
 	end
+end
+
+// Dot-clock PLL. When the top level reports the PLL locked and settled on the rate
+// this mode wants (dotclk_valid), the pixel enable follows the PLL's edges through
+// dotclk_ce instead of the fractional divider: the dot count per line is then exact
+// and tied to a real clock. The divider stays as the fallback while the PLL
+// reprograms, and for 24bpp geometries other than the one the table rate was made
+// for (2384 dots x 31469 Hz).
+reg [1:0] dotclk_valid_s = 2'b00;    // CLK_50M -> clk_vga
+always @(posedge clk_vga) dotclk_valid_s <= {dotclk_valid_s[0], dotclk_valid};
+wire fb24_rate_ok = (pixclk_n24 > 28'd74_900_000) && (pixclk_n24 < 28'd75_150_000);
+wire dot_slaved = dotclk_valid_s[1] && (~fb_native24 || fb24_rate_ok) && ~vga_f60;
+dotclk_ce dotclk_ce_inst (.clk(clk_vga), .dotclk(dotclk), .valid(dot_slaved), .ce(ce_dot));
+assign ce_video = dot_slaved ? ce_dot : ce_frac;
+assign vga_dot_slaved = dot_slaved;
+always @(posedge clk_vga) begin
+	vga_dot_rate <= fb_native24 ? 3'd5 :
+	                (clock_select[3:0] == 4'd0) ? 3'd0 :
+	                (clock_select[3:0] == 4'd1) ? 3'd1 :
+	                (clock_select[3:0] == 4'd2) ? (fb_native ? 3'd4 : 3'd2) : 3'd3;
 end
 
 //------------------------------------------------------------------------------ graphics controller (extended) segment select

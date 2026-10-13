@@ -482,6 +482,11 @@ system #(
 	.hps_apply_reset     (status[0]),
 	.software_reset      (software_reset),
 	.clock_rate          (CLOCK_RATE_HZ),
+	.dotclk              (clk_sys),      // sim: no dot-clock PLL, the fractional divider as before
+	.dotclk_valid        (1'b0),
+	.video_dot_rate      (),
+	.video_dot_slaved    (),
+	.dot_status          (8'd0),
 
 	.fdd_request         (fdd_request),
 	.ide0_request        (ide0_request),

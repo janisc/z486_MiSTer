@@ -5,6 +5,11 @@ module system (
     input         hps_apply_reset,
     output        software_reset,    // keyboard controller 0xFE reset command
 	input  [27:0] clock_rate,
+	input         dotclk,            // dot-clock PLL output (asynchronous to clk_sys)
+	input         dotclk_valid,      // the PLL runs at the rate video_dot_rate asks for, settled
+	output  [2:0] video_dot_rate,    // dot-clock family the VGA mode wants (vga.v)
+	output        video_dot_slaved,  // the pixel enable follows the PLL
+	input   [7:0] dot_status,        // read at port 2D8h (test tools)
 
 	output [1:0]  fdd_request,
 	output [2:0]  ide0_request,
@@ -446,6 +451,7 @@ reg         vga_d_cs;
 reg         debug_port_cs;
 reg         speedctl_cs;
 reg         fpu_cs;             // port F0h: clear the x87 error latch (IGNNE#)
+reg         dotstat_cs;         // port 2D8h: dot-clock PLL status (read only, test tools)
 wire        x87_ferr;           // z486 FERR#: unmasked x87 error pending
 reg         x87_ferr_d;
 reg         x87_ignne;
@@ -878,6 +884,7 @@ wire [7:0] iobus_readdata8 =
 	( mpu_cs                                 ) ? mpu_readdata      :
 	( joy_cs                                 ) ? joystick_readdata :
 	( vga_b_cs|vga_c_cs|vga_d_cs             ) ? vga_io_readdata   :
+	( dotstat_cs                             ) ? dot_status        :
 	( debug_port_cs                          ) ? 8'hE9             :
 	                                             8'hFF;
 
@@ -970,6 +977,7 @@ always @(posedge clk_sys) begin
 		debug_port_cs <= ({iobus_address_next[15:0]      } == 16'h0402);
 		speedctl_cs   <= ({iobus_address_next[15:1], 1'b0} == 16'h8888);
 		fpu_cs        <= (iobus_address_next == 16'h00F0);
+		dotstat_cs    <= (iobus_address_next == 16'h02D8);
 	end
 end
 
@@ -1516,6 +1524,10 @@ vga #(
 	.rst_n             (~rst[9]),
 	.clk_vga           (clk_sys),
 	.clock_rate_vga    (clock_rate),
+	.dotclk            (dotclk),
+	.dotclk_valid      (dotclk_valid),
+	.vga_dot_rate      (video_dot_rate),
+	.vga_dot_slaved    (video_dot_slaved),
 
 	.io_address        (iobus_address[3:0]),
 	.io_read           (iobus_read),
