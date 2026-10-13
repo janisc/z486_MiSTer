@@ -201,6 +201,7 @@ module vga #(
 
 	//vga
 	output              vga_ce,
+	output              vga_dot_ce,        // one cycle per dot; vga_ce marks the pixels among them (every dot, one in three in 24bpp)
 	input               vga_f60,
 	output      [2:0]   vga_memmode,
 	output reg          vga_blank_n,
@@ -2307,6 +2308,7 @@ end
 // Using the ce_video_reg register and dot_cnt_div instead of dot_cnt_enable fixes spikes in the vga_ce signal.
 reg render_ce_reg;
 always @(posedge clk_vga) render_ce_reg <= render_ce;
+assign vga_dot_ce = render_ce_reg;
 
 assign vga_ce = render_ce_reg & (
 	(fb_native16)         ? fb_pix_ce : // native 16bpp: one dot per pixel; 24bpp: one per three dots

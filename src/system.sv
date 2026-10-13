@@ -11,6 +11,7 @@ module system (
 	output        video_dot_slaved,  // the pixel enable follows the PLL
 	input   [7:0] dot_status,        // read at port 2D8h (test tools)
 	input   [7:0] dot_status2,       // port 2D9h: output-stage re-centrings
+	input  [31:0] dot_dbg,           // ports 2DAh-2DDh: the PLL's C0 register read back at DPRIO 00h (2DA/2DB) and 11h (2DC/2DD)
 
 	output [1:0]  fdd_request,
 	output [2:0]  ide0_request,
@@ -150,6 +151,7 @@ module system (
 	output  [7:0] syscfg,
 
 	output wire        video_ce,
+	output wire        video_dot_ce,
 	output wire        video_blank_n,
 	output wire        video_hsync,
 	output wire        video_vsync,
@@ -454,6 +456,8 @@ reg         speedctl_cs;
 reg         fpu_cs;             // port F0h: clear the x87 error latch (IGNNE#)
 reg         dotstat_cs;         // port 2D8h: dot-clock PLL status (read only, test tools)
 reg         dotstat2_cs;        // port 2D9h: output-stage re-centring count
+reg         dotdbg_cs;          // ports 2DAh-2DDh: DPRIO read-back bytes
+reg   [1:0] dotdbg_idx;
 wire        x87_ferr;           // z486 FERR#: unmasked x87 error pending
 reg         x87_ferr_d;
 reg         x87_ignne;
@@ -888,6 +892,7 @@ wire [7:0] iobus_readdata8 =
 	( vga_b_cs|vga_c_cs|vga_d_cs             ) ? vga_io_readdata   :
 	( dotstat_cs                             ) ? dot_status        :
 	( dotstat2_cs                            ) ? dot_status2       :
+	( dotdbg_cs                              ) ? dot_dbg[dotdbg_idx*8 +: 8] :
 	( debug_port_cs                          ) ? 8'hE9             :
 	                                             8'hFF;
 
@@ -982,6 +987,8 @@ always @(posedge clk_sys) begin
 		fpu_cs        <= (iobus_address_next == 16'h00F0);
 		dotstat_cs    <= (iobus_address_next == 16'h02D8);
 		dotstat2_cs   <= (iobus_address_next == 16'h02D9);
+		dotdbg_cs     <= (iobus_address_next >= 16'h02DA) && (iobus_address_next <= 16'h02DD);
+		dotdbg_idx    <= iobus_address_next[1:0] + 2'd2;
 	end
 end
 
@@ -1553,6 +1560,7 @@ vga #(
 
 	.irq               (irq_2),
 	.vga_ce            (video_ce),
+	.vga_dot_ce        (video_dot_ce),
 	.vga_blank_n       (video_blank_n),
 	.vga_horiz_sync    (video_hsync),
 	.vga_vert_sync     (video_vsync),

@@ -234,6 +234,7 @@ wire        ps2_mouse_clk_in;
 wire        ps2_mouse_data_in;
 
 wire        core_ce_pixel;
+wire        core_dot_ce;
 wire        tv15_en = status[127];   // OSD "Analog output" = TV 15kHz
 wire        core_hs_neg;
 wire        core_vs_neg;
@@ -513,6 +514,7 @@ reg         dotclk_valid = 0;
 reg   [2:0] dot_cfg_rate = 3'd1;      // the PLL's power-up setting is the 28.322 MHz family
 reg         dot_cfg_req = 0;
 wire        dot_cfg_busy, dot_cfg_ready;
+wire [15:0] rb_c0a, rb_c0b;           // the PLL's C0 register read back under both DPRIO maps (test ports 2DAh-2DDh)
 wire [63:0] dpll_reconfig_to, dpll_reconfig_from;
 
 pll_video pll_video
@@ -549,7 +551,7 @@ function [7:0] dot_c0_half;         // C0 = /36, /32, /28, /26, /14, /12 of the 
 	endcase
 endfunction
 
-dot_pll_cfg dpll_cfg
+dot_pll_cfg #(.FPLL1(0)) dpll_cfg     // first-half map: z486_mister.qsf pins the PLL to FRACTIONALPLL_X0_Y15
 (
 	.clk               (CLK_50M),
 	.req               (dot_cfg_req),
@@ -559,6 +561,8 @@ dot_pll_cfg dpll_cfg
 	.busy              (dot_cfg_busy),
 	.ready             (dot_cfg_ready),
 	.locked            (),
+	.rb_c0a            (rb_c0a),
+	.rb_c0b            (rb_c0b),
 	.reconfig_to_pll   (dpll_reconfig_to),
 	.reconfig_from_pll (dpll_reconfig_from)
 );
@@ -794,6 +798,7 @@ system #(
 	.video_dot_slaved    (core_dot_slaved),
 	.dot_status          ({out_running, dot_cfg_busy, core_dot_slaved, dot_cfg_rate, dotclk_valid, pll_dot_locked}),
 	.dot_status2         (out_resyncs),
+	.dot_dbg             ({rb_c0b, rb_c0a}),
 
 	.fdd_request         (mgmt_req[7:6]),
 	.ide0_request        (mgmt_req[2:0]),
@@ -932,6 +937,7 @@ system #(
 	.syscfg              (),
 
 	.video_ce            (core_ce_pixel),
+	.video_dot_ce        (core_dot_ce),
 	.video_blank_n       (core_de),
 	.video_hsync         (core_hs),
 	.video_vsync         (core_vs),
@@ -1266,24 +1272,26 @@ wire  [7:0] pre_g    = mt32_lcd ? {{2{mt32_lcd_pix}}, gamma_g[7:2]} : gamma_g;
 wire  [7:0] pre_b    = mt32_lcd ? {{2{mt32_lcd_pix}}, gamma_b[7:2]} : gamma_b;
 
 // Output stage (dot_resync.v): the raster re-timed to the dot clock. The renderer and
-// the helper blocks above run on the 85 MHz clock with the pixel enable; from here on
-// the framework's video clock is the PLL itself, one pixel per cycle (one per three
-// in the 24bpp mode, whose renderer enable is one per three dots), so the analog DAC
-// switches on dot boundaries and direct video is standard VGA timing. While the
-// renderer is not slaved to the PLL (a mode switch) the FIFOs hold, centred, and the
-// outputs stand still, like a real card's between modes. The TV raster goes through
-// a second FIFO of its own.
+// the helper blocks above run on the 85 MHz clock with their pixel enable; from here on
+// the framework's video clock is the PLL itself, one dot per cycle, so the analog DAC
+// switches on dot boundaries and direct video is standard VGA timing. The FIFOs are
+// written on every dot (in the 24bpp mode a pixel is three dots and the renderer's
+// pixel enable one in three) and carry a marker on the first dot of each pixel, which
+// comes out as CE_PIXEL for the scaler. While the renderer is not slaved to the PLL (a
+// mode switch) the FIFOs hold, centred, and the outputs stand still, like a real card's
+// between modes. The TV raster goes through a second FIFO of its own.
 wire        out_ce, out_hs, out_vs, out_de, out_running;
 wire [23:0] out_rgb;
 wire  [7:0] out_resyncs;
-wire        fb24_native = fb_native & fb_bpp[1];
+reg         pix_first = 0;          // this dot is the first of a pixel: the pixel enable came with the previous dot
+always @(posedge clk_sys) if (core_dot_ce) pix_first <= core_ce_pixel;
 dot_resync #(.WIDTH(27)) dot_resync_main
 (
 	.wclk    (clk_sys),
-	.wce     (core_ce_pixel),
+	.wce     (core_dot_ce),
+	.wpix    (pix_first),
 	.wdata   ({pre_r, pre_g, pre_b, gamma_hs, gamma_vs, gamma_de}),
 	.rclk    (clk_dot),
-	.rdiv3   (fb24_native),
 	.hold    (~core_dot_slaved),
 	.rce     (out_ce),
 	.rdata   ({out_rgb, out_hs, out_vs, out_de}),
@@ -1335,10 +1343,10 @@ vga_tv15 #(.CLK_RATE(CLOCK_RATE_HZ)) vga_tv15
 dot_resync #(.WIDTH(27)) dot_resync_alt
 (
 	.wclk    (clk_sys),
-	.wce     (core_ce_pixel),
+	.wce     (core_dot_ce),
+	.wpix    (pix_first),
 	.wdata   ({alt_pre_r, alt_pre_g, alt_pre_b, alt_pre_hs, alt_pre_vs, alt_pre_de}),
 	.rclk    (clk_dot),
-	.rdiv3   (fb24_native),
 	.hold    (~core_dot_slaved),
 	.rce     (),
 	.rdata   ({VGA_ALT_R, VGA_ALT_G, VGA_ALT_B, VGA_ALT_HS, VGA_ALT_VS, VGA_ALT_DE}),

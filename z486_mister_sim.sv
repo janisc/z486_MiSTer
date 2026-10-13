@@ -488,6 +488,7 @@ system #(
 	.video_dot_slaved    (),
 	.dot_status          (8'd0),
 	.dot_status2         (8'd0),
+	.dot_dbg             (32'd0),
 
 	.fdd_request         (fdd_request),
 	.ide0_request        (ide0_request),
@@ -632,6 +633,7 @@ system #(
 	.syscfg              (syscfg),
 
 	.video_ce            (video_ce),
+	.video_dot_ce        (),
 	.video_blank_n       (video_blank_n),
 	.video_hsync         (video_hsync),
 	.video_vsync         (video_vsync),

@@ -18,7 +18,14 @@
 //
 // DPRIO transactions are one clock wide; a read's data is on reconfig_from_pll[15:0]
 // two clocks after the read, captured here three clocks after, as the IP does.
-module dot_pll_cfg
+//
+// The fractional PLLs come in pairs on one DPRIO block, and the second PLL of a pair
+// mirrors the counter registers: its C0 is at address 11h where the first's is at 00h
+// (the framework's IP has the fitter patch a LUT for this; build 4 of 2026-10-13 wrote
+// C0 to 00h in a second-half location and nothing changed). FPLL1 selects the map, and
+// z486_mister.qsf pins the PLL to a first-half location. After every request the C0
+// register is read back at both addresses (rb_c0a, rb_c0b) for the test tools.
+module dot_pll_cfg #(parameter FPLL1 = 0)
 (
 	input             clk,              // the PLL's management clock (50 MHz); it is also the DPRIO clock
 	input             req,              // level: reconfigure to the values below (edge-detected)
@@ -27,6 +34,8 @@ module dot_pll_cfg
 	input      [31:0] m_frac,           // K: the fractional part of M, 32 bits
 	output reg        busy,             // 1 from the request to the last write
 	output reg        ready,            // 1 once the power-up initialization is over
+	output reg [15:0] rb_c0a,           // the C0 register read back at 00h after the last request
+	output reg [15:0] rb_c0b,           // the same at 11h (the other half's map)
 	output            locked,           // the PLL's lock, synchronized
 	output     [63:0] reconfig_to_pll,
 	input      [63:0] reconfig_from_pll
@@ -69,10 +78,15 @@ wire  [5:0] init_addr  = icnt[5:0];
 //   15h (bypass enables) read, written back with N's bit 5 set and M's bit 4, C0's bit 3 clear;
 //   17h (odd-division enables, VCO bit, K-ready bit 11) read, written back with bits 5, 4, 3 clear
 //       and bit 11 clear; 18h, 19h = K; 17h again with bit 11 set.
-localparam S_IDLE = 4'd0, S_N = 4'd1, S_M = 4'd2, S_C0 = 4'd3, S_RD15 = 4'd4, S_RD17 = 4'd5, S_W1 = 4'd6,
-           S_CAP15 = 4'd7, S_CAP17 = 4'd8, S_W15 = 4'd9, S_KCLR = 4'd10, S_KLO = 4'd11, S_KHI = 4'd12,
-           S_KSET = 4'd13;
-reg  [3:0] st = S_IDLE;
+localparam S_IDLE = 5'd0, S_N = 5'd1, S_M = 5'd2, S_C0 = 5'd3, S_RD15 = 5'd4, S_RD17 = 5'd5, S_W1 = 5'd6,
+           S_CAP15 = 5'd7, S_CAP17 = 5'd8, S_W15 = 5'd9, S_KCLR = 5'd10, S_KLO = 5'd11, S_KHI = 5'd12,
+           S_KSET = 5'd13, S_RB0 = 5'd14, S_RB1 = 5'd15, S_RBW = 5'd16, S_RBC0 = 5'd17, S_RBC1 = 5'd18;
+localparam [5:0] C0_ADDR = FPLL1 ? 6'h11 : 6'h00;
+reg  [4:0] st = S_IDLE;
+initial begin
+	rb_c0a = 16'd0;
+	rb_c0b = 16'd0;
+end
 reg        req_d = 1'b0;
 reg [15:0] r15 = 16'd0, r17 = 16'd0;
 reg  [7:0] c0_hi_r, c0_lo_r;
@@ -97,7 +111,7 @@ always @(posedge clk) begin
 		end
 		S_N:     begin dp_write <= 1'b1; dp_addr <= 6'h13; dp_data <= 16'h0000;           st <= S_M;     end
 		S_M:     begin dp_write <= 1'b1; dp_addr <= 6'h12; dp_data <= 16'h0909;           st <= S_C0;    end
-		S_C0:    begin dp_write <= 1'b1; dp_addr <= 6'h00; dp_data <= {c0_hi_r, c0_lo_r}; st <= S_RD15;  end
+		S_C0:    begin dp_write <= 1'b1; dp_addr <= C0_ADDR; dp_data <= {c0_hi_r, c0_lo_r}; st <= S_RD15; end
 		S_RD15:  begin dp_read  <= 1'b1; dp_addr <= 6'h15;                                st <= S_RD17;  end
 		S_RD17:  begin dp_read  <= 1'b1; dp_addr <= 6'h17;                                st <= S_W1;    end
 		S_W1:    st <= S_CAP15;                                                                           // read data arrives two clocks after the read
@@ -107,7 +121,13 @@ always @(posedge clk) begin
 		S_KCLR:  begin dp_write <= 1'b1; dp_addr <= 6'h17; dp_data <= r17 & ~16'h0838;    st <= S_KLO;   end
 		S_KLO:   begin dp_write <= 1'b1; dp_addr <= 6'h18; dp_data <= k_r[15:0];          st <= S_KHI;   end
 		S_KHI:   begin dp_write <= 1'b1; dp_addr <= 6'h19; dp_data <= k_r[31:16];         st <= S_KSET;  end
-		S_KSET:  begin dp_write <= 1'b1; dp_addr <= 6'h17; dp_data <= (r17 & ~16'h0038) | 16'h0800; st <= S_IDLE; end
+		S_KSET:  begin dp_write <= 1'b1; dp_addr <= 6'h17; dp_data <= (r17 & ~16'h0038) | 16'h0800; st <= S_RB0; end
+		// read back the C0 register under both maps for the test tools
+		S_RB0:   begin dp_read  <= 1'b1; dp_addr <= 6'h00;                                st <= S_RB1;   end
+		S_RB1:   begin dp_read  <= 1'b1; dp_addr <= 6'h11;                                st <= S_RBW;   end
+		S_RBW:   st <= S_RBC0;
+		S_RBC0:  begin rb_c0a <= reconfig_from_pll[15:0];                                 st <= S_RBC1;  end
+		S_RBC1:  begin rb_c0b <= reconfig_from_pll[15:0];                                 st <= S_IDLE;  end
 		default: st <= S_IDLE;
 	endcase
 end

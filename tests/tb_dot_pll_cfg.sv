@@ -88,8 +88,9 @@ reg         dr_req = 0;
 reg   [7:0] dr_hi = 0, dr_lo = 0;
 reg  [31:0] dr_k = 0;
 wire        dr_busy, dr_ready, dr_locked;
+wire [15:0] dr_rb0, dr_rb1;
 dot_pll_cfg dr (.clk(clk), .req(dr_req), .c0_hi(dr_hi), .c0_lo(dr_lo), .m_frac(dr_k), .busy(dr_busy), .ready(dr_ready),
-                .locked(dr_locked), .reconfig_to_pll(dr_to), .reconfig_from_pll(dr_from));
+                .locked(dr_locked), .rb_c0a(dr_rb0), .rb_c0b(dr_rb1), .reconfig_to_pll(dr_to), .reconfig_from_pll(dr_from));
 wire [15:0] dr_regs [0:63];
 integer dr_init, dr_clr, dr_set, dr_kb;
 dprio_model dr_model (.clk(clk), .to_pll(dr_to), .from_pll(dr_from), .regs(dr_regs),
@@ -138,6 +139,9 @@ task family(input [7:0] div, input [31:0] frac, input string label);
 		join
 		repeat (400) @(posedge clk);
 		compare(label);
+		$display("  C0 read back by the driver: 00h %04h 11h %04h  %s", dr_rb0, dr_rb1,
+		         (dr_rb0 == {1'b0, div[7:1], 1'b0, div[7:1]}) ? "ok" : "FAIL");
+		if (dr_rb0 != {1'b0, div[7:1], 1'b0, div[7:1]}) fails = fails + 1;
 	end
 endtask
 

@@ -1,14 +1,18 @@
 // dot_resync: re-times a raster from the renderer's clock to the dot clock.
 //
-// The renderer produces one pixel (colour, syncs, blanking) per pixel enable in
-// its own clock domain, at the dot rate on average but a cycle or so early or
-// late each time (the enable is the dot-clock PLL's edge seen through a
+// The renderer produces its raster (colour, syncs, blanking) one dot per dot
+// enable in its own clock domain, at the dot rate on average but a cycle or so
+// early or late each time (the enable is the dot-clock PLL's edge seen through a
 // synchronizer, and a dot is 3.376 of its clocks at 25.175 MHz). This FIFO is
-// written on every such enable and read at the dot clock, one pixel per cycle
-// (or per three cycles in the 24bpp mode, where the renderer's enable is one
-// per three dots), so every pixel, sync edge and blanking edge comes out on a
-// dot-clock edge. Both rates come from the same PLL, so the fill level stays
-// where it started, around 16 of 64 entries, give or take the enable's jitter.
+// written on every such enable and read at the dot clock, one entry per cycle,
+// so every pixel, sync edge and blanking edge comes out on a dot-clock edge. A
+// marker says which dot starts a pixel (every dot, or one in three in the 24bpp
+// mode, where a pixel is three dots long) and comes out as rce, the framework's
+// CE_PIXEL. Both rates come from the same PLL, so the fill level stays where it
+// started, around 16 of 64 entries, give or take the enable's jitter. (A first
+// version carried one entry per pixel and popped every third cycle in 24bpp; the
+// renderer restarts its divide-by-three at every hsync and a line is not a
+// multiple of three dots, so the two sides drifted a dot a line.)
 //
 // While the renderer is not slaved to the PLL (hold = 1: the PLL reprograms at
 // a mode switch, or a geometry the PLL table has no rate for) the read side stops
@@ -31,13 +35,13 @@
 module dot_resync #(parameter WIDTH = 27)
 (
 	input                  wclk,     // the renderer's clock
-	input                  wce,      // one pixel is on wdata
+	input                  wce,      // one dot is on wdata
+	input                  wpix,     // ... and it is the first dot of a pixel
 	input      [WIDTH-1:0] wdata,
 
 	input                  rclk,     // the dot clock
-	input                  rdiv3,    // 1: one pixel per three rclk cycles (24bpp); quasi-static
 	input                  hold,     // wclk domain: the renderer is not slaved to the dot clock, stop and stay centred
-	output reg             rce,      // a pixel was put on rdata this cycle
+	output                 rce,      // the dot on rdata starts a pixel (CE_PIXEL)
 	output     [WIDTH-1:0] rdata,
 	output reg             running,  // 1 while pixels flow, 0 while re-centring
 	output reg       [7:0] resyncs   // re-centrings so far (rclk domain)
@@ -59,7 +63,7 @@ function [AW:0] gray2bin;
 	end
 endfunction
 
-(* ramstyle = "M10K" *) reg [WIDTH-1:0] mem [0:(1 << AW) - 1];
+(* ramstyle = "M10K" *) reg [WIDTH:0] mem [0:(1 << AW) - 1];   // the marker above the data
 
 // ---- write side
 reg  [AW:0] wptr = 0;
@@ -74,7 +78,7 @@ wire        wen = wce && !wfull;
 wire [AW:0] wptr_n = wptr + 1'd1;
 
 always @(posedge wclk) begin
-	if (wen) mem[wptr[AW-1:0]] <= wdata;
+	if (wen) mem[wptr[AW-1:0]] <= {wpix, wdata};
 end
 
 always @(posedge wclk) begin
@@ -96,8 +100,8 @@ wire [AW:0] wptr_r = gray2bin(wptr_g_r2);
 wire [AW:0] occ = wptr_r - rptr;
 wire [AW:0] rptr_n = rptr + 1'd1;
 wire [AW:0] rptr_c = wptr_r - 7'd16; // the middle: 16 entries behind the writer
-reg   [1:0] div = 0;
-reg [WIDTH-1:0] rdata_q;
+reg   [WIDTH:0] rdata_q;
+reg         pop_q = 1'b0;          // an entry was put on rdata_q this cycle
 (* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
 reg         hold_r1 = 0;
 reg         hold_r2 = 0;
@@ -105,12 +109,12 @@ reg         hold_r2 = 0;
 always @(posedge rclk) begin
 	rdata_q <= mem[rptr[AW-1:0]];
 end
-assign rdata = rdata_q;
+assign rdata = rdata_q[WIDTH-1:0];
+assign rce   = pop_q & rdata_q[WIDTH];
 
 initial begin
 	running = 0;
 	resyncs = 0;
-	rce = 0;
 end
 
 always @(posedge rclk) begin
@@ -118,7 +122,7 @@ always @(posedge rclk) begin
 	wptr_g_r2 <= wptr_g_r1;
 	hold_r1   <= hold;
 	hold_r2   <= hold_r1;
-	rce <= 1'b0;
+	pop_q <= 1'b0;
 	if (!running || hold_r2) begin
 		// re-centre on 16: jump back behind the writer when overfull, wait when underfull
 		running <= 1'b0;
@@ -126,23 +130,18 @@ always @(posedge rclk) begin
 			rptr   <= rptr_c;
 			rptr_g <= bin2gray(rptr_c);
 		end
-		else if (occ >= 7'd12 && !hold_r2) begin
-			running <= 1'b1;
-			div     <= 2'd0;
-		end
+		else if (occ >= 7'd12 && !hold_r2) running <= 1'b1;
 	end
 	else if (occ == 0 || occ >= 7'd56) begin
 		// ran empty (the writer stalled) or nearly full (the writer is faster): re-centre
 		running <= 1'b0;
 		resyncs <= resyncs + 1'd1;
 	end
-	else if (!rdiv3 || div == 2'd2) begin
+	else begin
 		rptr   <= rptr_n;
 		rptr_g <= bin2gray(rptr_n);
-		rce    <= 1'b1;
-		div    <= 2'd0;
+		pop_q  <= 1'b1;
 	end
-	else div <= div + 1'd1;
 end
 
 endmodule
