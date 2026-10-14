@@ -2265,12 +2265,17 @@ end
 // that amount (doubled when the dot clock is divided, EGA-style modes). Sync
 // is untouched and pixels stay aligned to DE, so the scaler path does not
 // move. The delay line is a small RAM addressed by a free-running dot counter.
-// (native 24bpp: 16 dots of 25 MHz = 48 dots at the tripled clock, less the two
-// dots the pixel assembly already adds; a multiple of 3 keeps the pixel clock
-// enable aligned with the delayed pixels)
-wire [7:0] vid_delay = fb_native24 ? 8'd45 : (seq_8dot_char ? 8'd16 : 8'd27) << seq_dotclock_divided;
+// (native 24bpp: 16 dots of 25 MHz = 48 dots at the tripled clock. The pixel
+// assembly already adds two dots to the pixels but not to the blanking, so the
+// pixels get 46 and the blanking two more, 48: the window then covers the last
+// pixel to its end, and a pixel's three dots start on the pixel clock enable
+// (46 + 2 is a multiple of 3), so the scaler and the capture sample the right
+// pixel. With both at 45 the last column was blanked and the picture sat one
+// pixel to the right in the scaler, release 7 to 13.)
+wire [7:0] vid_delay = fb_native24 ? 8'd46 : (seq_8dot_char ? 8'd16 : 8'd27) << seq_dotclock_divided;
 reg [24:0] vid_dly [0:255];
 reg  [7:0] vid_wr;
+reg  [1:0] vid_blank_24;     // native 24bpp: the blanking two dots behind the pixels
 // The optional line-at-a-time renderer (ONDEMAND_SCANOUT) has no monitor to align to: it
 // takes the pixels with upstream's latency, without the delay line.
 generate if (ONDEMAND_SCANOUT) begin : g_out_ondemand
@@ -2279,10 +2284,13 @@ generate if (ONDEMAND_SCANOUT) begin : g_out_ondemand
 		if (scanline_request_accept) vga_blank_n <= 1'b0;
 	end
 end else begin : g_out_delayed
+	reg vid_blank_n_q;
 	always @(posedge clk_vga) if (render_ce) begin
 		vid_dly[vid_wr] <= {vga_r_pre, vga_g_pre, vga_b_pre, vga_blank_n_pre};
 		vid_wr <= vid_wr + 1'd1;
-		{vga_r, vga_g, vga_b, vga_blank_n} <= vid_dly[vid_wr - vid_delay];
+		{vga_r, vga_g, vga_b, vid_blank_n_q} <= vid_dly[vid_wr - vid_delay];
+		vid_blank_24 <= {vid_blank_24[0], vid_blank_n_q};
+		vga_blank_n  <= fb_native24 ? vid_blank_24[1] : vid_blank_n_q;
 	end
 end endgenerate
 
