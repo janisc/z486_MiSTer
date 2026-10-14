@@ -19,16 +19,20 @@ kinds of display.
   blanked rather than sent.
 
 HDMI works as on every core in both cases and shows the same picture through the
-scaler. The FAQ below has the setup for each display, what works and what does not.
+scaler. Since release 14 the raster is timed by a real pixel clock from a
+reconfigurable PLL instead of a counter on the system clock, so both outputs and
+direct video get exact pixel timing in every mode; the FAQ says what that changes
+and what it costs. The FAQ below also has the setup for each display, what works
+and what does not.
 
 Since release 11 the core also carries, as an experiment and off by default, a
 **Gravis UltraSound**: xolod79's GF1 model from ao486 with its sample memory in the
 HPS DDR3, since z486 keeps its main memory in the SDRAM. The FAQ has the settings
 and [docs/GUS.md](docs/GUS.md) the how.
 
-The changes are on branch `native-vga`; `main` tracks upstream. Experiments,
-including a parked real dot-clock PLL, are on `exp/*` branches. The rbf files of
-every build made along the way, with a description of each, are in
+The changes are on branch `native-vga`; `main` tracks upstream. Experiments live on
+`exp/*` branches; the pixel clock's development history is `exp/dot-clock-master`.
+The rbf files of every build made along the way, with a description of each, are in
 [`builds/`](builds/BUILDS.md). Nothing here has been submitted upstream. The rbf of
 the current release is attached to the [Releases page](../../releases). The upstream
 README, unchanged, follows at the end of this file after the thanks.
@@ -178,10 +182,16 @@ its drivers commented out; with that repaired it page-faults on every z486, stoc
 while ao486 runs it, a matter for upstream). The usual list of games was then launched by
 hand on the release binary. The test tools (register dumps, retrace counters, VRAM banking, a resident
 INT 10h logger, the GUS memory tests) and the debug floppy are described in
-[`builds/BUILDS.md`](builds/BUILDS.md).
+[`builds/BUILDS.md`](builds/BUILDS.md). Release 14 (the pixel clock) was checked
+with the fork's own test programs in every mode on a VGA CRT, a 15 kHz TV and an
+HDMI-to-VGA adapter, not through the game list; it is a big change to the video
+path, so reports are welcome.
 
 **Which z486 is this built on, and what is known not to work?**
-Release 13 is built on z486 20261012; everything new in it is upstream's work. The
+Release 14 is built on the same z486 20261012 as release 13; what changed is the
+fork's own video path (the pixel clock, above) and a 24-bit fix: the picture sat one
+pixel to the right of its window and the last column was black, since release 7.
+Release 13 was built on z486 20261012; everything new in it was upstream's work. The
 CPU gained real x87 transcendentals (FSINCOS, FPREM1, FXTRACT and FYL2XP1 were no-ops
 before), FST ST(i), FFREEP and FBLD, hardware breakpoints, a faster memory path and a
 set of game fixes (SHLD/SHRD with 16-bit operands, the TSS access flag, MOV to the
@@ -205,9 +215,9 @@ a program misbehaves) and the `RAM Size` order that gives a fresh configuration
 A full VBETEST sweep of every VBE mode found these limits. 1280x1024 loses the CRT: this
 BIOS runs it interlaced from a 36 MHz clock, below 30 kHz (HDMI shows it). 1024x768 in 8 and
 15/16 bit works at 60 Hz (48 kHz): the core gives the ET4000's clock index 2 the 65 MHz a
-real 1024x768 board has, for these framebuffer modes only. At that rate the pixel widths
-alternate between one and two clocks of the core's 85 MHz, which shows as stair steps on
-one-pixel lines and not at all on game graphics (Scorched Earth at 1024x768). The 16-colour
+real 1024x768 board has, for these framebuffer modes only. Since release 14 those 65 MHz
+pixels are exact; before, their widths alternated between one and two clocks of the core's
+85 MHz, which showed as stair steps on one-pixel lines. The 16-colour
 modes above 64 KB per plane, 1024x768 and 1280x1024, stay at 32.5 MHz (below 30 kHz) and
 also repeat the picture vertically: the legacy VGA memory is four 64 KB planes, as in stock
 and ao486. 800x600 in 24 bit is beyond the analog port at the core's 85 MHz. UniVBE's own
@@ -233,6 +243,31 @@ mounted images), the `games/Z486` folder and the `[z486]` section of MiSTer.ini.
 OSD's bottom line shows `nv-yymmdd` on this fork and, from z486 20261012 on, `vyymmdd`
 on the stock core, which is how you tell which one is loaded.
 
+**What changed in release 14, and why a real pixel clock?**
+Until release 13 the picture was timed by the core's single 85 MHz clock, with a
+counter standing in for each mode's pixel clock: a 25.175 MHz pixel lasted three
+clocks or four, 3.376 on average. That was the simpler way to build it, and it had
+its merits: one clock domain, nothing to reprogram, and for the modes most games use
+a CRT does not show a 12 ns wobble on a 40 ns pixel. It stopped being good enough in
+two places. Scalers that take the raw raster over HDMI (direct video) are told the
+pixel rate as a whole number of clocks, so a 640-pixel mode came out 540 pixels wide
+on a RetroTINK-4K, with a blank band. And in the high-resolution and high-colour
+modes, where a pixel is only one or two clocks long, the approximation showed as
+uneven pixel widths. With what the earlier releases had taught, the proper way got
+another go: a reconfigurable PLL generates the real pixel clock of every mode, the
+renderer follows it, and the output stage puts every pixel edge on that clock. What
+it changes for you: direct-video scalers get a standard timing at the true pixel
+clock with the repetition count at 1, so a RetroTINK-4K should sample the picture
+pixel for pixel (none was available for testing, so reports from one are very
+welcome, good or bad); the analog port is exact in every mode, where the old step
+was 30 % of a pixel in the 320- and 640-wide modes, 42 % at 800x600, 76 % at 1024x768
+and 89 % in 24-bit colour; the TV output is cut from the same exact raster. The
+trade-offs, said plainly: it is a big change to the video path, so there may be bugs
+the tests did not reach, and an issue with the mode and a photo is the best help;
+and the clock reprogramming costs about a thousand logic cells, so the core is at
+98 % of the chip with no idea yet of how to make that smaller.
+[docs/DOT_CLOCK.md](docs/DOT_CLOCK.md) has the engineering.
+
 ## How it works
 
 The analog VGA port always carries the core's own raster: the real 25.175 and
@@ -246,6 +281,17 @@ output`, which chooses the raster the port carries; the HDMI output is always th
 scaler, and the exceptions in the FAQ are MiSTer.ini settings handled by the
 framework. The `Border` option shows or hides the overscan border on both outputs (the framework
 blanks the analog picture with the same signal the scaler crops to).
+
+Since release 14 the raster is timed by a real pixel clock. A reconfigurable PLL
+generates each mode's rate (25.175, 28.322, 32.5, 35.9 and 65 MHz, 75 MHz for 24-bit
+colour, each nudged by a few hundred ppm so that a line is a whole number of cycles
+of both clocks); the renderer keeps the 85 MHz system clock with its pixel enable
+slaved to the PLL's edges, and a small FIFO per raster re-times pixels and syncs
+into the pixel-clock domain, so the DAC switches on dot boundaries and the HDMI
+direct-video stream is a standard timing with repetition 1. The PLL is reprogrammed
+at each mode switch by the framework's reconfiguration block.
+[docs/DOT_CLOCK.md](docs/DOT_CLOCK.md) has the pieces, the measurements and the
+lessons.
 
 In TV mode a line store (`src/soc/vga_tv15.sv`) sits between the raster and the
 analog port. Every VGA line lasts 31.8 us whatever the mode, so the store captures
