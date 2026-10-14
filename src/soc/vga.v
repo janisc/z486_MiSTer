@@ -2239,14 +2239,25 @@ assign vga_vsync_neg = general_vsync;
 // display window, sampled at the same stage as the DAC RAM address (same latency).
 reg [23:0] fb_rgb_q;
 reg        fb_bypass_q;
+// Native 24bpp: the pixel assembly delivers a pixel two dots after its dot, so the
+// gates that open the bypass and blank the colour follow the display window two
+// dots behind as well; otherwise the last pixel's two trailing dots fell outside
+// both and column 639 was black (release 7 to 13).
+reg  [1:0] nd_dly24, bl_dly24;
+always @(posedge clk_vga) if (render_ce) begin
+	nd_dly24 <= {nd_dly24[0], vgaprep_not_displaying};
+	bl_dly24 <= {bl_dly24[0], vgareg_blank};
+end
+wire nd_gate = fb_native24 ? nd_dly24[1] : vgaprep_not_displaying;
+wire bl_gate = fb_native24 ? bl_dly24[1] : vgareg_blank;
 always @(posedge clk_vga) if (render_ce) begin
 	fb_rgb_q    <= fb_rgb;
-	fb_bypass_q <= fb_native16 && ~vgaprep_not_displaying;
+	fb_bypass_q <= fb_native16 && ~nd_gate;
 end
 
-wire [7:0] vga_r_nxt = (seq_screen_disable || vgareg_blank) ? 8'd0 : fb_bypass_q ? fb_rgb_q[23:16] : { dac_color[17:12], dac_color[17:16] };
-wire [7:0] vga_g_nxt = (seq_screen_disable || vgareg_blank) ? 8'd0 : fb_bypass_q ? fb_rgb_q[15:8]  : { dac_color[11:6],  dac_color[11:10] };
-wire [7:0] vga_b_nxt = (seq_screen_disable || vgareg_blank) ? 8'd0 : fb_bypass_q ? fb_rgb_q[7:0]   : { dac_color[5:0],   dac_color[5:4]   };
+wire [7:0] vga_r_nxt = (seq_screen_disable || bl_gate) ? 8'd0 : fb_bypass_q ? fb_rgb_q[23:16] : { dac_color[17:12], dac_color[17:16] };
+wire [7:0] vga_g_nxt = (seq_screen_disable || bl_gate) ? 8'd0 : fb_bypass_q ? fb_rgb_q[15:8]  : { dac_color[11:6],  dac_color[11:10] };
+wire [7:0] vga_b_nxt = (seq_screen_disable || bl_gate) ? 8'd0 : fb_bypass_q ? fb_rgb_q[7:0]   : { dac_color[5:0],   dac_color[5:4]   };
 reg [7:0] vga_r_pre, vga_g_pre, vga_b_pre;
 always @(posedge clk_vga) if (render_ce) begin
 	vga_r_pre <= vga_r_nxt;
@@ -2275,7 +2286,7 @@ end
 wire [7:0] vid_delay = fb_native24 ? 8'd46 : (seq_8dot_char ? 8'd16 : 8'd27) << seq_dotclock_divided;
 reg [24:0] vid_dly [0:255];
 reg  [7:0] vid_wr;
-reg  [1:0] vid_blank_24;     // native 24bpp: the blanking two dots behind the pixels
+reg        vid_blank_24;     // native 24bpp: the blanking two dots behind the pixels (one register here, one below)
 // The optional line-at-a-time renderer (ONDEMAND_SCANOUT) has no monitor to align to: it
 // takes the pixels with upstream's latency, without the delay line.
 generate if (ONDEMAND_SCANOUT) begin : g_out_ondemand
@@ -2289,8 +2300,8 @@ end else begin : g_out_delayed
 		vid_dly[vid_wr] <= {vga_r_pre, vga_g_pre, vga_b_pre, vga_blank_n_pre};
 		vid_wr <= vid_wr + 1'd1;
 		{vga_r, vga_g, vga_b, vid_blank_n_q} <= vid_dly[vid_wr - vid_delay];
-		vid_blank_24 <= {vid_blank_24[0], vid_blank_n_q};
-		vga_blank_n  <= fb_native24 ? vid_blank_24[1] : vid_blank_n_q;
+		vid_blank_24 <= vid_blank_n_q;
+		vga_blank_n  <= fb_native24 ? vid_blank_24 : vid_blank_n_q;
 	end
 end endgenerate
 
