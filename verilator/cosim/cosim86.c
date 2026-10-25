@@ -63,6 +63,10 @@ static int cur_fpu;
  * an FPU store's byte that differs is adopted from z486 and logged. */
 static int x87_lenient;
 static uint64_t x87_adopted;
+/* Diagnostic only: basic arithmetic uses z486's 24/53-bit precision while
+ * architectural CW, loads, and conversions remain unchanged. Unlike the
+ * lenient mode, every FPU store (including integer PCM) is still checked. */
+static int x87_pc53;
 /* IGNNE#, as system.sv: an OUT to port F0h sets it while an x87 error is
  * pending; it drops with the error (FNCLEX, FNINIT). */
 static int ignne;
@@ -624,6 +628,10 @@ static void drop_step(void) {
  * API
  * ============================================================ */
 void cosim_init(uint32_t bytes) {
+    const char *pc53 = getenv("COSIM_X87_PC53");
+    x87_pc53 = pc53 && atoi(pc53) != 0;
+    if (x87_pc53)
+        printf("cosim: diagnostic: reference basic x87 arithmetic capped at 53 bits; writes remain strict\n");
     uint32_t pow2 = 1;
     while (pow2 < bytes) pow2 <<= 1;
     ram = calloc(pow2, 1);
@@ -890,6 +898,12 @@ static int run(long rep_left) {
      * do): the instruction completes, it is not cut. */
     if (rep_string && rep_left >= 0 && (ecx_count ? (uint32_t)rep_left : (rep_left & 0xFFFF)) == 0)
         rep_left = -1;
+    const uint16_t saved_x87_cw = fpu_state.cwd;
+    const int basic_x87 = op == 0xD8 || op == 0xDC || op == 0xDE ||
+                         (op == 0xDA && d.mod != 3) ||
+                         (op == 0xD9 && d.mod == 3 && d.reg == 7 && d.rm == 2); /* FSQRT */
+    const int cap_x87 = x87_pc53 && basic_x87 && (saved_x87_cw & 0x0300);
+    if (cap_x87) fpu_state.cwd = (saved_x87_cw & ~0x0300u) | 0x0200u;
     if (rep_string && rep_left >= 0) {
         int saved_trap = trap;
         trap = 1;                       /* 86Box ends a REP after one element */
@@ -918,6 +932,7 @@ static int run(long rep_left) {
             faulted = exec_one();
         }
     }
+    if (cap_x87) fpu_state.cwd = saved_x87_cw;
 
     if (stall) {
         undo_ram();

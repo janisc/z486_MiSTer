@@ -35,6 +35,10 @@
 #include "control_server.h"
 #include "wav_writer.h"
 #include "zsst_profile.h"
+#ifdef SIM_MISTERFS_HOST
+#include "misterfs_host.h"
+static bool misterfs_server_active = false;
+#endif
 
 using std::cerr;
 using std::cout;
@@ -86,6 +90,9 @@ static const uint64_t FLATLINE_HOLD_THRESHOLD = 150000; // posedges of frozen ou
 static string disk_path = "../../sdcard/freedos.img";
 static string cdrom_path;
 static string floppy_path;
+static string floppy_b_path;
+static bool floppy_writable = false;
+static bool boot_from_hdd = false;
 static string boot0_path = "boot0.rom";
 static string boot1_path = "boot1.rom";
 static std::array<bool, 256> boot_pages_seen{};
@@ -437,24 +444,24 @@ static FloppyGeometry infer_floppy_geometry(size_t image_size) {
 
 class HpsFloppy {
 public:
-	bool open(const string& path) {
-		image_ = read_file(path);
-		if (image_.empty() || (image_.size() % 512) != 0)
+	bool open(const string& path, unsigned drive = 0) {
+		image_[drive] = read_file(path);
+		if (image_[drive].empty() || (image_[drive].size() % 512) != 0)
 			throw std::runtime_error("floppy image must be a non-empty whole-sector image: " + path);
-		image_name_ = fs::path(path).filename().string();
-		geo_ = infer_floppy_geometry(image_.size());
-		present_ = true;
-		cout << "Mounted floppy A: " << image_name_
-		     << " sectors=" << geo_.total_sectors
-		     << " cyl=" << static_cast<int>(geo_.cylinders)
-		     << " heads=" << static_cast<int>(geo_.heads)
-		     << " spt=" << static_cast<int>(geo_.sectors_per_track)
+		geo_[drive] = infer_floppy_geometry(image_[drive].size());
+		present_[drive] = true;
+		cout << "Mounted floppy " << char('A' + drive) << ": " << fs::path(path).filename().string()
+		     << " sectors=" << geo_[drive].total_sectors
+		     << " cyl=" << static_cast<int>(geo_[drive].cylinders)
+		     << " heads=" << static_cast<int>(geo_[drive].heads)
+		     << " spt=" << static_cast<int>(geo_[drive].sectors_per_track)
+		     << (floppy_writable ? " (transient writes)" : " (write protected)")
 		     << "\n";
 		return true;
 	}
 
-	bool present() const { return present_; }
-	const FloppyGeometry& geometry() const { return geo_; }
+	bool present(unsigned drive = 0) const { return present_[drive]; }
+	const FloppyGeometry& geometry(unsigned drive = 0) const { return geo_[drive]; }
 
 	void tick(Vz486_mister_sim& tb) {
 		if (tb.reset) {
@@ -465,7 +472,7 @@ public:
 
 		switch (state_) {
 		case IDLE:
-			if (!present_) return;
+			if (!present_[0] && !present_[1]) return;
 			if (tb.fdd_request & 1) {
 				pulse_read(tb, 0xF200);
 				state_ = READ_GET_SECTOR;
@@ -479,10 +486,7 @@ public:
 			selected_drive_ = (tb.mgmt_readdata >> 15) & 1;
 			sector_ = tb.mgmt_readdata & 0x7FFF;
 			cnt_ = 0;
-			if (selected_drive_ != 0)
-				cout << "FDD: unsupported drive B read request\n";
-			else
-				cout << "FDD: READ sector=" << sector_ << "\n";
+			cout << "FDD " << char('A' + selected_drive_) << ": READ sector=" << sector_ << "\n";
 			state_ = READ_SEND;
 			break;
 
@@ -499,20 +503,18 @@ public:
 			selected_drive_ = (tb.mgmt_readdata >> 15) & 1;
 			sector_ = tb.mgmt_readdata & 0x7FFF;
 			cnt_ = 0;
-			if (selected_drive_ != 0)
-				cout << "FDD: unsupported drive B write request\n";
-			else
-				cout << "FDD: WRITE sector=" << sector_ << "\n";
+			cout << "FDD " << char('A' + selected_drive_) << ": WRITE sector=" << sector_ << "\n";
 			pulse_read(tb, 0xF20F);
 			state_ = WRITE_RECV;
 			break;
 
 		case WRITE_RECV:
-			if (cnt_ > 0)
-				write_byte(sector_, cnt_ - 1, tb.mgmt_readdata);
+			// WRITE_GET_SECTOR already popped byte 0. The registered FIFO
+			// output now holds it; skipping this cycle loses the first byte.
+			write_byte(sector_, cnt_, tb.mgmt_readdata);
+			cnt_++;
 			if (cnt_ < 512) {
 				pulse_read(tb, 0xF20F);
-				cnt_++;
 			} else {
 				state_ = IDLE;
 			}
@@ -543,24 +545,24 @@ private:
 	}
 
 	uint8_t read_byte(uint32_t sector, int byte_index) const {
-		if (selected_drive_ != 0) return 0;
+		const auto& image = image_[selected_drive_];
 		size_t offset = static_cast<size_t>(sector) * 512u + static_cast<size_t>(byte_index);
-		if (offset >= image_.size()) return 0;
-		return image_[offset];
+		if (offset >= image.size()) return 0;
+		return image[offset];
 	}
 
 	void write_byte(uint32_t sector, int byte_index, uint16_t data) {
-		if (selected_drive_ != 0) return;
+		if (!floppy_writable) return;
+		auto& image = image_[selected_drive_];
 		size_t offset = static_cast<size_t>(sector) * 512u + static_cast<size_t>(byte_index);
-		if (offset >= image_.size()) return;
-		image_[offset] = static_cast<uint8_t>(data);
+		if (offset >= image.size()) return;
+		image[offset] = static_cast<uint8_t>(data);
 	}
 
 	State state_ = IDLE;
-	bool present_ = false;
-	FloppyGeometry geo_{};
-	vector<uint8_t> image_;
-	string image_name_;
+	bool present_[2] = {};
+	FloppyGeometry geo_[2]{};
+	vector<uint8_t> image_[2];
 	uint32_t sector_ = 0;
 	int cnt_ = 0;
 	uint8_t selected_drive_ = 0;
@@ -858,7 +860,7 @@ static void step() {
 			        (unsigned long long)sim_time,
 			        static_cast<unsigned>(last_syscfg),
 			        (last_syscfg & 0x80) ? "DOS" : "OSD",
-			        static_cast<unsigned>(last_syscfg & 0x03));
+			        static_cast<unsigned>(last_syscfg & 0x07));
 		}
 
 		if (g_zsst_debug) {
@@ -1020,6 +1022,10 @@ static void step() {
 					ddram_mem[a - DDR_SHMEM_BASE] = b;
 				}
 			}
+#ifdef SIM_MISTERFS_HOST
+            if (misterfs_server_active && byte_addr >= 0x300ce000 && byte_addr < 0x300d0000)
+                misterfs_host_poll();
+#endif
 		}
 		if (tb.fb_pal_wr) {
 			const uint32_t data = tb.fb_pal_data;
@@ -1075,7 +1081,7 @@ static uint8_t bin2bcd(unsigned val) {
 static void configure_floppy_slot(unsigned slot, bool present, const FloppyGeometry& geo = FloppyGeometry{}) {
 	uint16_t base = static_cast<uint16_t>(0xF200 + (slot << 7));
 	pulse_mgmt_write(base + 0x0, present ? 1 : 0);
-	pulse_mgmt_write(base + 0x1, 1);
+	pulse_mgmt_write(base + 0x1, floppy_writable ? 0 : 1);
 	pulse_mgmt_write(base + 0x2, present ? geo.cylinders : 0);
 	pulse_mgmt_write(base + 0x3, present ? geo.sectors_per_track : 0);
 	pulse_mgmt_write(base + 0x4, present ? geo.total_sectors : 0);
@@ -1091,7 +1097,7 @@ static std::tm g_rtc_tm{};
 static bool g_rtc_fixed = false;
 
 static void configure_cmos(bool hdd0_present, bool floppy0_present, const FloppyGeometry& floppy0_geo,
-                           bool boot_from_floppy = false) {
+                           bool boot_from_floppy, bool floppy1_present, const FloppyGeometry& floppy1_geo) {
 	// A diff against ao486-sim wants --rtc "2024-01-01 00:00:00" (its CMOS
 	// seed), or every INT 1Ah time read differs.
 	std::tm tm = g_rtc_tm;
@@ -1121,9 +1127,11 @@ static void configure_cmos(bool hdd0_present, bool floppy0_present, const Floppy
 	cmos[0x0B] = 0x02;
 	cmos[0x0D] = 0x80;
 
-	cmos[0x10] = static_cast<uint8_t>(floppy0_present ? (floppy0_geo.cmos_type << 4) : 0x00);
+	cmos[0x10] = static_cast<uint8_t>((floppy0_present ? (floppy0_geo.cmos_type << 4) : 0x00) |
+	                                 (floppy1_present ? floppy1_geo.cmos_type : 0x00));
 	cmos[0x12] = static_cast<uint8_t>((hdd0_present ? 0xF : 0x0) << 4);
-	cmos[0x14] = 0x4D;
+	const unsigned floppy_count = unsigned(floppy0_present) + unsigned(floppy1_present);
+	cmos[0x14] = 0x0C | (floppy_count ? 1 : 0) | (floppy_count > 1 ? 0x40 : 0);
 	cmos[0x15] = 0x80;
 	cmos[0x16] = 0x02;
 	cmos[0x17] = ext_mem_kb & 0xFF;
@@ -1151,8 +1159,9 @@ static void configure_cmos(bool hdd0_present, bool floppy0_present, const Floppy
 
 static void configure_x86_management(bool hdd0_present, const HpsFloppy& floppy0, bool boot_from_floppy) {
 	configure_floppy_slot(0, floppy0.present(), floppy0.geometry());
-	configure_floppy_slot(1, false);
-	configure_cmos(hdd0_present, floppy0.present(), floppy0.geometry(), boot_from_floppy);
+	configure_floppy_slot(1, floppy0.present(1), floppy0.geometry(1));
+	configure_cmos(hdd0_present, floppy0.present(), floppy0.geometry(), boot_from_floppy,
+	               floppy0.present(1), floppy0.geometry(1));
 }
 
 static bool dump_screen_png(const fs::path& path, int width, int height) {
@@ -1281,7 +1290,10 @@ static bool dump_vga_planes(const fs::path& path) {
 }
 
 static void usage() {
-	cout << "Usage: Vz486_mister_sim [--trace] [--trace-start sim_time] [--trace-file path] [--headless] [--cosim] [--end sim_time] [--disk path] [--cdrom iso] [--floppy path] [--boot0 path] [--boot1 path] [--ram-mb 16|32|64|128] [--cpu-speed full|56|30|15] [--cpu-speed-at sim_time:full|56|30|15] [--opl2|--opl3] [--variable-vsync] [--vga-border|--no-vga-border] [--fb-bgr|--fb-rgb] [--fb-1555|--fb-565] [--enter-at sim_time] [--key-at sim_time:key] [--key-down-at sim_time:key] [--key-up-at sim_time:key] [--key-on-text substring:key] [--mouse-at sim_time:dx:dy[:buttons]] [--control-port N] [--control-bind IPv4] [--ctrl-alt-del-at sim_time] [--screen-at sim_time] [--vga-plane-at sim_time:path] [--log-eip CS:EIP] [--screenshot-dir path] [--screenshot-interval sim_time] [--stop-on-text substring] [--no-ide] [--zsst-debug] [--zsst-write-trace path] [--record] [--record-file path] [--load-ram path] [--checkpoint-dir path] [--checkpoint-interval-sec N] [--checkpoint-keep N] [--restore path] [--snapshot-dir path] [--snapshot-interval-sec N] [--snapshot-keep N] [--restore-snapshot path] [--rtc \"YYYY-MM-DD HH:MM:SS\" (CMOS clock start; default host local time)] [--no-audio-clock (faster; no OPL/SB audio)] [--ddr-busy P[,L]] [--ddr-busy-rand N[,SEED]]  (all times are sim_time = 2*cycle; mouse buttons are bits L/R/M)\n";
+	cout << "Shared folders: --shared-dir path (writable host export; requires MISTERFS_MAIN at build time).\n";
+	cout << "Floppy options: --floppy path (A:), --floppy-b path (B:), "
+	        "--floppy-writable (RAM-only writes), --boot-hdd (prefer hard disk).\n";
+	cout << "Usage: Vz486_mister_sim [--trace] [--trace-start sim_time] [--trace-file path] [--headless] [--cosim] [--end sim_time] [--disk path] [--cdrom iso] [--floppy path] [--boot0 path] [--boot1 path] [--ram-mb 16|32|64|128] [--cpu-speed full|56|30|15|6|5|4|3] [--cpu-speed-at sim_time:full|56|30|15|6|5|4|3] [--opl2|--opl3] [--variable-vsync] [--vga-border|--no-vga-border] [--fb-bgr|--fb-rgb] [--fb-1555|--fb-565] [--enter-at sim_time] [--key-at sim_time:key] [--key-down-at sim_time:key] [--key-up-at sim_time:key] [--key-on-text substring:key] [--mouse-at sim_time:dx:dy[:buttons]] [--control-port N] [--control-bind IPv4] [--ctrl-alt-del-at sim_time] [--screen-at sim_time] [--vga-plane-at sim_time:path] [--log-eip CS:EIP] [--screenshot-dir path] [--screenshot-interval sim_time] [--stop-on-text substring] [--no-ide] [--zsst-debug] [--zsst-write-trace path] [--record] [--record-file path] [--load-ram path] [--checkpoint-dir path] [--checkpoint-interval-sec N] [--checkpoint-keep N] [--restore path] [--snapshot-dir path] [--snapshot-interval-sec N] [--snapshot-keep N] [--restore-snapshot path] [--rtc \"YYYY-MM-DD HH:MM:SS\" (CMOS clock start; default host local time)] [--no-audio-clock (faster; no OPL/SB audio)] [--ddr-busy P[,L]] [--ddr-busy-rand N[,SEED]]  (all times are sim_time = 2*cycle; mouse buttons are bits L/R/M)\n";
 }
 
 int main(int argc, char** argv) {
@@ -1319,6 +1331,7 @@ int main(int argc, char** argv) {
 	unsigned ram_mb = 64;          // the OSD default
 	bool ram_mb_explicit = false;
 	unsigned cpu_speed_status = 0;
+	string shared_directory;
 	bool opl3_mode = true;
 	bool opl_mode_explicit = false;
 	bool variable_vsync = false;
@@ -1331,7 +1344,11 @@ int main(int argc, char** argv) {
 		if (speed == "56") return 1;
 		if (speed == "30") return 2;
 		if (speed == "15") return 3;
-		throw std::invalid_argument("CPU speed must be full, 56, 30, or 15");
+		if (speed == "6") return 4;
+		if (speed == "5") return 5;
+		if (speed == "4") return 6;
+		if (speed == "3") return 7;
+		throw std::invalid_argument("CPU speed must be full, 56, 30, 15, 6, 5, 4, or 3");
 	};
 
 	for (int i = 1; i < argc; ++i) {
@@ -1385,6 +1402,12 @@ int main(int argc, char** argv) {
 			hps_ide_set_jitter(true, (uint32_t)std::stoul(argv[++i]));
 		} else if (arg == "--floppy" && i + 1 < argc) {
 			floppy_path = argv[++i];
+		} else if (arg == "--floppy-b" && i + 1 < argc) {
+			floppy_b_path = argv[++i];
+		} else if (arg == "--floppy-writable") {
+			floppy_writable = true;
+		} else if (arg == "--boot-hdd") {
+			boot_from_hdd = true;
 		} else if (arg == "--boot0" && i + 1 < argc) {
 			boot0_path = argv[++i];
 		} else if (arg == "--boot1" && i + 1 < argc) {
@@ -1396,6 +1419,8 @@ int main(int argc, char** argv) {
 				cerr << "--ram-mb must be 16, 32, 64, or 128\n";
 				return 1;
 			}
+			} else if (arg == "--shared-dir" && i + 1 < argc) {
+				shared_directory = argv[++i];
 			} else if (arg == "--cpu-speed" && i + 1 < argc) {
 				try {
 					cpu_speed_status = parse_cpu_speed(argv[++i]);
@@ -1719,9 +1744,10 @@ int main(int argc, char** argv) {
 	}
 	// The floppy model keeps no state of its own: a restore reopens the image
 	// (its contents as in the file; writes since the snapshot are not kept).
-	if (!floppy_path.empty()) {
+	if (!floppy_path.empty() || !floppy_b_path.empty()) {
 		try {
-			floppy0.open(floppy_path);
+			if (!floppy_path.empty()) floppy0.open(floppy_path);
+			if (!floppy_b_path.empty()) floppy0.open(floppy_b_path, 1);
 		} catch (const std::exception& e) {
 			cerr << e.what() << "\n";
 			return 1;
@@ -1857,7 +1883,7 @@ int main(int argc, char** argv) {
 		}
 		tb.reset = 0;
 		full_step();
-		configure_x86_management(ide0.present(), floppy0, floppy0.present());
+		configure_x86_management(ide0.present(), floppy0, floppy0.present() && !boot_from_hdd);
 	}
 	trace_loop_started = true;
 
@@ -2537,6 +2563,16 @@ int main(int argc, char** argv) {
 		            (uint64_t{vga_border} << 54);
 	tb.eval();
 
+    if (!shared_directory.empty()) {
+#ifdef SIM_MISTERFS_HOST
+        misterfs_host_init(shared_directory, ddram_mem.data() + 0xce000, 0x2000);
+        misterfs_server_active = true;
+        cout << "MISTERFS host service enabled\n";
+#else
+        cerr << "--shared-dir requires MISTERFS_MAIN pointing to a Main_MiSTer checkout at build time\n";
+        return 1;
+#endif
+    }
 	auto process_control_commands = [&]() {
 		control_server.update_status(sim_time, resolution_x, resolution_y, ps2_mouse_buttons);
 		for (const string& line : control_server.drain_commands()) {
@@ -2645,7 +2681,7 @@ int main(int argc, char** argv) {
 		while (next_cpu_speed_event < cpu_speed_events.size() &&
 		       cpu_speed_events[next_cpu_speed_event].first == cycle) {
 			const unsigned speed = cpu_speed_events[next_cpu_speed_event].second;
-			tb.status = (tb.status & ~(uint64_t{3} << 8)) | (uint64_t{speed} << 8);
+			tb.status = (tb.status & ~(uint64_t{7} << 8)) | (uint64_t{speed} << 8);
 			cout << sim_time << ": CPU speed status=" << speed << "\n";
 			next_cpu_speed_event++;
 		}

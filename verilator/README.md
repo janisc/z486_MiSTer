@@ -38,6 +38,11 @@ albeit very slowly.
 Times on the command line are sim time, which is twice the CPU cycle count.
 Useful options include:
 * `--headless`: run without the SDL window (for scripted and long runs).
+* `--floppy <image>` / `--floppy-b <image>`: mount floppy A: / B:.
+  Images are write-protected unless `--floppy-writable` is supplied; writes
+  then stay in memory and never change the image files. Floppy writes are
+  not saved in checkpoints or portable snapshots, so replay write tests from
+  reset. `--boot-hdd` keeps hard-disk boot priority with a floppy mounted.
 * `--end <sim_time>`: stop at this time.
 * `--trace`: write an FST waveform (`waveform.fst`, or `--trace-file path`);
   `--trace-start <sim_time>` starts it later.
@@ -138,11 +143,18 @@ PC: BIOS, DOS, Windows and applications from real disk images.
 difference. The reference is built from an 86Box checkout at `cosim/86Box`
 (our branch z486-cosim; see [cosim/UPSTREAM.md](cosim/UPSTREAM.md)) together
 with the glue in `cosim/` as `libcosim86.a`; without the checkout the
-simulator still builds but `--cosim` is unavailable. It checks the EIP of
+simulator still builds but `--cosim` is unavailable. It checks the CS:EIP of
 every issued instruction, every memory and I/O write, and the general
 registers; z486 supplies I/O and A0000-BFFFF read data, interrupt vectors, DMA
 writes and page-walk A/D updates, so peripheral bugs show as hangs, not
 divergences.
+
+`make test-cosim-irq-cs` runs a boot-sector regression (requires NASM). It
+delivers a hardware timer interrupt whose handler and return address have
+the same EIP but different CS selectors. Comparing only offsets delays the
+reference interrupt and reports a false stack-frame divergence. The issue
+CS tap forwards a same-edge microcode CS write, including IRET's final
+delay slot. This changes simulation diagnostics only, not the board CPU.
 
 The reference includes the x87 (86Box's softfloat FPU); `+z486_x87_off` turns
 it off in z486 and the reference together.
@@ -239,4 +251,15 @@ order or 16-bit format; `--fb-bgr` and `--fb-1555` restore the defaults.
 
 See [voodoo.md](voodoo.md) for the whole-PC Voodoo (zSST) build and trace
 capture.
+
+## CPU speed selection
+
+`--cpu-speed full|56|30|15|6|5|4|3` selects the same eight execution rates as
+the OSD. `--cpu-speed-at <sim_time>:<speed>` schedules a live change. These
+options throttle CPU execution, not the physical simulation/peripheral clocks.
+The extended SYSCTL capability ABI is documented in [sysctl.md](../doc/sysctl.md).
+
+## Shared-folder simulation
+
+Build with `MISTERFS_MAIN=<Main_MiSTer-checkout>` to link its actual filesystem service, then run with `--shared-dir <host-directory>` and a guest disk containing the current ao486 MISTERFS driver. The guest can write to this exported directory; use an isolated test directory. `tests/prepare_misterfs_test.py --disk <dos71-raw-image> --driver <MISTERFS.EXE>` (from the repository root) prepares a cloned DOS image and prints the run command; `--verify` checks the resulting 131085-byte binary round-trip and filesystem operations. The DOS image must have its first FAT partition at LBA 63. Host file handles are not saved in snapshots, so run this test from reset.
 

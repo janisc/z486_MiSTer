@@ -98,6 +98,12 @@ Co-simulation switches and choices that follow z486 (keep on our branch):
 
 ## Our glue (this directory)
 
+### Precision-limited x87 diagnosis
+
+Strict comparison is the default. `COSIM_X87_PC53=1` optionally caps the reference's basic ADD/SUB/MUL/DIV/SQRT arithmetic at 53 significand bits (24-bit control remains 24-bit), matching z486's current arithmetic limit. It does not change the guest-visible control word, raw loads, conversions, or any register/store comparison. This separates known extended-precision differences from incorrect integer PCM samples in floating-point audio decoders. It is a diagnostic model, not validation against full x87 precision; transcendentals are not precision-matched by this switch. The mode is logged at startup and must be repeated when restoring a snapshot.
+
+`make test-x87-pc53` checks native/capped extended and single arithmetic, raw 80-bit loads, stored control words and exact real stores, and deliberately supplies an incorrect integer store to ensure it is rejected in both modes. Do not substitute `COSIM_X87_VALUES=0` for this test: that mode adopts wrong FPU stores, including integer PCM samples, and can hide the bug being sought.
+
 `cosim86.c`/`cosim86.h` (the co-simulation API), `cosim86_stub.c`,
 `iss_glue.h`, `stubs.c` (flat memory with a paging
 translation hook, weak exception entry points, `do_seg_load`, wait-state

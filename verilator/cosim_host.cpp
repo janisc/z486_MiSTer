@@ -28,7 +28,7 @@ namespace {
 
 enum { K_IO = 1, K_INTA = 2, K_X87 = 4, K_DEV = 8, K_WALK = 16 };
 
-struct IssueEv { uint32_t eip; uint32_t ecx; uint32_t eflags; uint64_t t; uint32_t gpr[8]; };
+struct IssueEv { uint32_t eip; uint32_t ecx; uint32_t eflags; uint32_t cs; uint64_t t; uint32_t gpr[8]; };
 struct ReadReq { uint32_t addr; uint8_t be; uint8_t kind; };
 
 Vz486_mister_sim* g_tb = nullptr;
@@ -128,6 +128,7 @@ uint32_t g_x87_ref_last[27];
 bool g_x87_dirty = false;
 unsigned g_x87_miss = 0, g_x87_period = 0;
 bool g_x87_values = true;
+bool g_x87_precision = true;    // Optional diagnostic: ignore only sticky PE.
 uint64_t g_x87_checks = 0;
 
 void print_x87(const char* who, const uint32_t* w) {
@@ -162,7 +163,10 @@ bool check_x87(const IssueEv& ev) {
     for (int i = 0; i < 27; i++) dut[i] = (uint32_t)cosim_x87_word(i);
     g_x87_checks++;
     // Without values, C1 (rounded up) goes too: it follows the rounding.
-    const uint32_t sw_mask = g_x87_values ? 0xFFFF : 0xFDFF;
+    // PE can also differ with arithmetic precision. Its separate opt-in
+    // diagnostic mask changes comparison only, never the guest's FPU state.
+    const uint32_t sw_mask = (g_x87_values ? 0xFFFF : 0xFDFF) &
+                             (g_x87_precision ? 0xFFFF : 0xFFDF);
     bool same = (dut[0] & 0xFFFF) == (ref[0] & 0xFFFF) && (dut[1] & sw_mask) == (ref[1] & sw_mask) &&
                 (dut[2] & 0xFFFF) == (ref[2] & 0xFFFF);
     for (int i = 0; same && g_x87_values && i < 8; i++) {
@@ -215,20 +219,23 @@ bool process_issues() {
             g_squash_ok = cosim_last_fault() >= 0;
             cosim_adopt_flags(ev.eflags);
         }
-        // z486 took a hardware interrupt at this boundary.
-        if (cosim_eip() != ev.eip && !g_vectors.empty()) {
+        // Compare the complete logical PC: an IRQ handler can have the same
+        // offset as the interrupted code in a different segment. EIP alone
+        // would run that code again before noticing the pending interrupt.
+        const auto same_pc = [&]() { return cosim_eip() == ev.eip && cosim_cs() == ev.cs; };
+        if (!same_pc() && !g_vectors.empty()) {
             int v = g_vectors.front();
             g_vectors.pop_front();
             g_irqs++;
             if (g_trace)
-                printf("%llu: cosim irq %02x at %04x:%08x -> z486 %08x\n", (unsigned long long)ev.t, v,
-                       cosim_cs(), cosim_eip(), ev.eip);
+                printf("%llu: cosim irq %02x at %04x:%08x -> z486 %04x:%08x\n", (unsigned long long)ev.t, v,
+                       cosim_cs(), cosim_eip(), ev.cs, ev.eip);
             if (cosim_interrupt(v) != COSIM_OK) {
                 diverge(cosim_error(), ev.t);
                 return false;
             }
         }
-        if (cosim_eip() != ev.eip && g_squash_ok) {
+        if (!same_pc() && g_squash_ok) {
             // A younger instruction z486 issued before an older one's fault
             // was delivered; the next issue is the handler.
             g_squash_ok = false;
@@ -236,14 +243,14 @@ bool process_issues() {
             g_issues.pop_front();
             continue;
         }
-        if (cosim_eip() != ev.eip) {
+        if (!same_pc()) {
             // An instruction fetch fault: z486 enters the handler without
             // issuing the faulting instruction, which the reference still runs.
             int r = cosim_step();
-            if (r == COSIM_ERROR || cosim_last_fault() < 0 || cosim_eip() != ev.eip) {
+            if (r == COSIM_ERROR || cosim_last_fault() < 0 || !same_pc()) {
                 char msg[256];
-                snprintf(msg, sizeof(msg), "z486 issued EIP %08x; the reference is at %08x",
-                         ev.eip, cosim_eip());
+                snprintf(msg, sizeof(msg), "z486 issued %04x:%08x; the reference is at %04x:%08x",
+                         ev.cs, ev.eip, cosim_cs(), cosim_eip());
                 diverge(r == COSIM_ERROR ? cosim_error() : msg, ev.t);
                 return false;
             }
@@ -264,9 +271,12 @@ void cosim_host_enable(Vz486_mister_sim* tb, unsigned ram_mb) {
     g_ram_mb = ram_mb;
     g_trace = getenv("COSIM_TRACE") != nullptr;
     if (const char* v = getenv("COSIM_X87_VALUES")) g_x87_values = atoi(v) != 0;
+    if (const char* v = getenv("COSIM_X87_PRECISION")) g_x87_precision = atoi(v) != 0;
+    if (!g_x87_precision)
+        printf("cosim: diagnostic mode: x87 sticky precision flag (PE) is NOT compared\n");
     cosim_set_x87_lenient(!g_x87_values);
     cosim_init(ram_mb << 20);
-    printf("cosim: 86Box reference, %u MB, checking issue EIPs and memory/I/O writes\n", ram_mb);
+    printf("cosim: 86Box reference, %u MB, checking issue CS:EIPs and memory/I/O writes\n", ram_mb);
 }
 
 bool cosim_host_cycle(uint64_t t) {
@@ -387,7 +397,7 @@ bool cosim_host_cycle(uint64_t t) {
             copy_ram();
             g_ram_copied = true;
         }
-        IssueEv ev = { tb.cosim_issue_eip, tb.cosim_ecx, tb.cosim_eflags, t, {} };
+        IssueEv ev = { tb.cosim_issue_eip, tb.cosim_ecx, tb.cosim_eflags, tb.cosim_issue_cs, t, {} };
         for (int r = 0; r < 8; r++) ev.gpr[r] = tb.cosim_gprs[r];
         g_issues.push_back(ev);
         g_issued++;
@@ -409,8 +419,9 @@ void cosim_host_report() {
            (unsigned long long)g_squashed, (unsigned long long)g_stalls,
            (unsigned long long)g_resets);
     if (g_x87_checks)
-        printf("cosim: x87 state checked at %llu idle issues%s\n", (unsigned long long)g_x87_checks,
-               g_x87_values ? "" : " (values not compared)");
+        printf("cosim: x87 state checked at %llu idle issues%s%s\n", (unsigned long long)g_x87_checks,
+               g_x87_values ? "" : " (values not compared)",
+               g_x87_precision ? "" : " (PE not compared)");
     if (cosim_x87_adopted())
         printf("cosim: %llu x87 store bytes differed and were adopted from z486\n",
                (unsigned long long)cosim_x87_adopted());

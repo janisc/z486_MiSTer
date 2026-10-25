@@ -127,6 +127,7 @@ module z486_mister_sim (
 	output        cosim_cpu_reset_n,
 	output        cosim_issue,
 	output [31:0] cosim_issue_eip,
+	output logic [15:0] cosim_issue_cs,
 	output [31:0] cosim_ecx,
 	output [31:0] cosim_eflags,
 	output        cosim_a20,
@@ -156,6 +157,7 @@ module z486_mister_sim (
 // The simulation build overrides this parameter for speed-sensitive testing.
 parameter [27:0] CLOCK_RATE_HZ = 28'd20_000_000;
 parameter ENABLE_X87 = 1'b1;
+parameter ENABLE_SHARED_MAILBOX = 1'b1;
 
 wire        software_reset;
 reg  [7:0]  software_reset_count;
@@ -167,7 +169,7 @@ assign soft_reset_req = software_reset;
 
 wire  [7:0] syscfg;
 assign dbg_syscfg = syscfg;
-wire  [1:0] cpu_speed_osd = {status[9] ^ status[8], status[8]};
+wire  [2:0] cpu_speed_osd = status[10:8];
 
 reg   [7:0] mouse_data;
 reg         mouse_data_valid;
@@ -470,6 +472,7 @@ system #(
 `endif
 	.ICACHE_SET_BITS(7),
 	.ENABLE_X87(ENABLE_X87),
+	.ENABLE_SHARED_MAILBOX(ENABLE_SHARED_MAILBOX),
 	.ENABLE_CMS(1'b0),
 `ifdef Z486_VOODOO
 	.ENABLE_VOODOO(1'b1)
@@ -623,6 +626,15 @@ system #(
 	.fast_off           (1'b0),          // sim: +z486_fast_off / +z486_fast_toggle=N
 	.cache_off          (1'b0),          // sim: +z486_cache_off / +z486_cache_toggle=N
 	.x87_off            (sim_x87_off),   // +z486_x87_off, as the OSD switch
+	// No host gamepad is modeled. Floating inputs otherwise create a centred
+	// joystick that games detect but the simulator cannot calibrate or drive.
+	.joystick_dis       (2'b11),
+	.joystick_dig_1     (14'd0),
+	.joystick_dig_2     (14'd0),
+	.joystick_ana_1     (16'd0),
+	.joystick_ana_2     (16'd0),
+	.joystick_mode      (3'd3),
+	.joystick_timed     (2'd0),
 	.syscfg              (syscfg),
 
 	.video_ce            (video_ce),
@@ -1021,6 +1033,31 @@ assign debug_first_instruction_o = debug_first_instruction;
 assign cosim_cpu_reset_n      = system_i.z486_cpu.reset_n;
 assign cosim_issue            = system_i.z486_cpu.i_issue && !system_i.z486_cpu.stall;
 assign cosim_issue_eip        = system_i.z486_cpu.EIP;
+// IRET's last micro-op can write CS on the same edge that issues the target.
+// Like EIP, the logical issue PC must include that pending write, not dbg_cs.
+always_comb begin
+    cosim_issue_cs = system_i.z486_cpu.CS;
+    if (system_i.z486_cpu.uc_exec) begin
+        case (system_i.z486_cpu.uc_dest)
+            z486_pkg::DEST_CS:
+                if (system_i.z486_cpu.pe && !system_i.z486_cpu.vm)
+                    cosim_issue_cs[15:2] = system_i.z486_cpu.cs_source_value[15:2];
+                else
+                    cosim_issue_cs = system_i.z486_cpu.cs_source_value;
+            z486_pkg::DEST_USTEP_TASK_CS:
+                cosim_issue_cs = system_i.z486_cpu.cs_source_value;
+            z486_pkg::DEST_CR0:
+                if (!system_i.z486_cpu.CR0[0] &&
+                    (system_i.z486_cpu.uc_source == z486_pkg::SRC_IRF2 ?
+                        system_i.z486_cpu.IND[0] : system_i.z486_cpu.dest_value[0]))
+                    cosim_issue_cs[1:0] = 2'b00;
+            default: ;
+        endcase
+        if (system_i.z486_cpu.prot_transition.copy_stack_dpl &&
+            system_i.z486_cpu.prot_transition.active)
+            cosim_issue_cs[1:0] = system_i.z486_cpu.prot_transition.copy_dpl;
+    end
+end
 assign cosim_ecx              = system_i.z486_cpu.data_unit_inst.gpr_capture_view[1];
 assign cosim_eflags           = system_i.z486_cpu.eflags_fwd;
 assign cosim_a20              = system_i.z486_cpu.a20_enable;
