@@ -30,7 +30,7 @@ module sdram
     output            busy,
     input       [1:0] sdram_size,
 
-    // Port 0 - higher priority (valid/ready handshake)
+    // Port 0 - CPU (DMA port 1 has priority, as in the hardware controller)
     input             valid0,       // request valid (held until ready)
     output            ready0,       // 1-cycle pulse: request accepted
     input             wr0,          // 1: write, 0: read
@@ -43,7 +43,7 @@ module sdram
     input             burst_wrap0,  // 4-dword line read: wrap from the requested dword
     output reg        burst_done0,  // burst done signal
 
-    // Port 1
+    // Port 1 - deadline-sensitive DMA
     input             valid1,
     output            ready1,
     input             wr1,
@@ -217,7 +217,7 @@ always @(posedge clk) begin
     // ---- Normal mode: SDRAM timing simulation ----
     case (state)
     IDLE: begin
-        if (valid0) begin
+        if (valid0 && !valid1) begin
             addr <= {addr0[26:2],1'b0};  // convert to 16-bit word address
             din <= din0;
             wr <= wr0;

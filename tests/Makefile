@@ -6,6 +6,8 @@ OBJ_DIR := obj_dir
 test: $(OBJ_DIR)/Vtb_iobus_adapter $(OBJ_DIR)/Vtb_floppy_io $(OBJ_DIR)/Vtb_pit_io $(OBJ_DIR)/Vtb_rtc_ram_size $(OBJ_DIR)/Vtb_sdram_size $(OBJ_DIR)/Vtb_sdram_partial $(OBJ_DIR)/Vtb_main_memory_svga $(OBJ_DIR)/Vtb_vga_fb_dimensions $(OBJ_DIR)/Vtb_vga_ondemand_mode13 $(OBJ_DIR)/Vtb_vga_dword_write $(OBJ_DIR)/Vtb_vga_plane_ram $(OBJ_DIR)/Vtb_mt32pi
 	./$(OBJ_DIR)/Vtb_opl_host_if
 	./$(OBJ_DIR)/Vtb_opl3_sbpro
+	./$(OBJ_DIR)/Vtb_sdram_dma_hw
+	./$(OBJ_DIR)/Vtb_sdram_dma_sim
 	./$(OBJ_DIR)/Vtb_iobus_adapter
 	./$(OBJ_DIR)/Vtb_floppy_io
 	./$(OBJ_DIR)/Vtb_pit_io
@@ -20,6 +22,21 @@ test: $(OBJ_DIR)/Vtb_iobus_adapter $(OBJ_DIR)/Vtb_floppy_io $(OBJ_DIR)/Vtb_pit_i
 	./$(OBJ_DIR)/Vtb_mt32pi
 
 test: $(OBJ_DIR)/Vtb_opl_host_if $(OBJ_DIR)/Vtb_opl3_sbpro
+
+test: $(OBJ_DIR)/Vtb_sdram_dma_hw $(OBJ_DIR)/Vtb_sdram_dma_sim
+
+.PHONY: test-sdram-dma
+test-sdram-dma: $(OBJ_DIR)/Vtb_sdram_dma_hw $(OBJ_DIR)/Vtb_sdram_dma_sim
+	./$(OBJ_DIR)/Vtb_sdram_dma_hw
+	./$(OBJ_DIR)/Vtb_sdram_dma_sim
+
+$(OBJ_DIR)/Vtb_sdram_dma_hw: tb_sdram_dma_priority.sv ../src/memory/sdram.v | $(OBJ_DIR)
+	$(VERILATOR) --binary --timing -Wno-fatal --Mdir $(OBJ_DIR)/sdram_dma_hw \
+		--top-module tb_sdram_dma_priority $^ -o ../Vtb_sdram_dma_hw
+
+$(OBJ_DIR)/Vtb_sdram_dma_sim: tb_sdram_dma_priority.sv ../src/memory/sdram_sim.v | $(OBJ_DIR)
+	$(VERILATOR) --binary --timing -Wno-fatal --Mdir $(OBJ_DIR)/sdram_dma_sim \
+		--top-module tb_sdram_dma_priority $^ -o ../Vtb_sdram_dma_sim
 
 OPL_DIR := ../src/soc/sound/opl3
 OPL_SOURCES := $(OPL_DIR)/opl3_pkg.sv $(filter-out $(OPL_DIR)/opl3_pkg.sv,$(wildcard $(OPL_DIR)/*.sv)) $(OPL_DIR)/afifo.v ../src/common/synchronizer.sv

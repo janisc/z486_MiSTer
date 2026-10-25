@@ -2,6 +2,8 @@
 //
 // This is intentionally outside system.sv: physical SDRAM is the special
 // DE10 deployment, while the portable PC and KV260 use abstract request ports.
+// Port 1 carries deadline-sensitive DMA and wins over new CPU transactions;
+// already accepted CPU bursts are never preempted.
 module split_sdram_backend #(
     parameter FREQ = 50_000_000,
     parameter HAS_DQM = 1'b1,
