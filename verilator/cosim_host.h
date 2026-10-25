@@ -1,6 +1,6 @@
 // Full-system co-simulation host: z486 in the MiSTer sim against the 86Box
 // CPU core (cosim/cosim86.c), checked in program
-// order: the EIP of every issued instruction, every memory and I/O write.
+// order: the CS:EIP of every issued instruction, every memory and I/O write.
 #pragma once
 #include <cstddef>
 #include <cstdint>

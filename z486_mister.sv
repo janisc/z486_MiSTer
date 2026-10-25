@@ -162,7 +162,7 @@ localparam CONF_STR = {
 	"P2-;",
 	"P2oTU,RAM Size,64MB,128MB,16MB,32MB;", // Lowercase 'o' maps T/U to status[62:61].
 	"P2-;",
-	"P2O89,CPU Speed,Full,56 MHz,30 MHz,15 MHz;",
+	"P2O8A,CPU Speed,Full,56 MHz,30 MHz,15 MHz,6 MHz,5 MHz,4 MHz,3 MHz;",
 	"P2O[96],L1 Cache,On,Off;",
 	"P2O[97],x87 FPU,On,Off (at reset);",
 	"P2O[95],CPU Pipeline,Fast,Compatible;",
@@ -219,7 +219,7 @@ wire [127:0] status;
 wire         fb_native;              // framebuffer mode rendered natively (svga_linebuf)
 wire   [1:0] fb_bpp;                 // ... at 0 = 8, 1 = 16, 2 = 24 bits per pixel
 wire         video_dac_565;          // HiColor DAC command register: 16bpp framebuffer is 5:6:5
-wire  [1:0] cpu_speed_osd = {status[9] ^ status[8], status[8]};
+wire  [2:0] cpu_speed_osd = status[10:8]; // Original four OSD encodings are unchanged.
 wire  [1:0] buttons;
 wire [10:0] ps2_key;
 wire [24:0] ps2_mouse;
@@ -783,6 +783,7 @@ system #(
 	.ICACHE_SET_BITS(ICACHE_SET_BITS),
 	.ENABLE_X87(ENABLE_X87),
 	.ENABLE_CMS(ENABLE_CMS),
+	.ENABLE_SHARED_MAILBOX(1'b1),
 	// DE10-Nano deliberately remains the PC-only build.
 	.ENABLE_VOODOO(1'b0),
 	.ENABLE_GUS(1'b1)

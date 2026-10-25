@@ -95,6 +95,7 @@ module trick_sw_detection
     logic host_force_timer_overflow = 0;
     logic start_counter = 0;
     logic [REG_TIMER_WIDTH-1:0] timer1 = 0;
+    logic opl3_mode = 0;
 
     always_ff @(posedge clk_host) begin
         cs_p1_n <= cs_n;
@@ -112,12 +113,16 @@ module trick_sw_detection
 
         if (wr_p1 && !wr_p2)
             if (!address_p1[0]) begin // address write mode
-                host_reg_wr.bank_num <= address_p1[1];
+                // Match the audio-domain decoder's YMF262 NEW=0 aliasing.
+                host_reg_wr.bank_num <= address_p1[1] &&
+                    (opl3_mode || din_p1 == 8'h05);
                 host_reg_wr.address <= din_p1;
             end
             else begin             // data write mode
                 host_reg_wr.valid <= 1;
                 host_reg_wr.data <= din_p1;
+                if (host_reg_wr.bank_num && host_reg_wr.address == 8'h05)
+                    opl3_mode <= din_p1[0];
             end
 
         if (host_reg_wr.valid && host_reg_wr.bank_num == 0 && host_reg_wr.address == 'h2)
@@ -126,6 +131,7 @@ module trick_sw_detection
         if (!ic_n) begin
             host_reg_wr <= 0;
             timer1 <= 0;
+            opl3_mode <= 0;
         end
     end
 

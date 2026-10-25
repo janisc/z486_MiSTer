@@ -144,7 +144,7 @@ module system (
 	input   [5:0] bootcfg,
     input   [1:0] ram_size,       // 0/1/2/3 = 16/32/64/128MB exposed to software
     input         uma_ram,
-	input   [1:0] cpu_speed_osd,  // 0=full, 1=15, 2=30, 3=56 MHz
+	input   [2:0] cpu_speed_osd,  // OSD order: Full/56/30/15/6/5/4/3 MHz
 	input         fast_off,       // Dev menu: fast paths off
 	input         cache_off,      // Dev menu: L1 caches off
 	input         x87_off,        // Dev menu: no coprocessor (at reset)
@@ -262,6 +262,7 @@ parameter DCACHE_LINE_WRAP = 1'b0;
 parameter ICACHE_SET_BITS = 8;   // icache size: 8 = 16KB, 7 = 8KB
 parameter ENABLE_X87 = 1'b0;
 parameter ENABLE_CMS = 1'b1;
+parameter ENABLE_SHARED_MAILBOX = 1'b0; // MiSTer enables its live HPS DDR mailbox.
 parameter VGA_USE_URAM = 1'b0;
 parameter VGA_ONDEMAND_SCANOUT = 1'b0;
 parameter ENABLE_VOODOO = 1'b0;
@@ -462,8 +463,9 @@ wire        x87_ferr;           // z486 FERR#: unmasked x87 error pending
 reg         x87_ferr_d;
 reg         x87_ignne;
 reg         irq_13;
-reg   [7:0] ctlport = 0;
-reg   [7:0] speedctl_low = 0;
+wire  [7:0] ctlport;
+wire  [7:0] speedctl_readdata;
+wire  [2:0] cpu_speed_selected;
 
 wire        fdd0_inserted;
 
@@ -542,6 +544,7 @@ wire        cpu_triple_fault_reset;
 
 z486 #(
     .PROTECT_UMA_ROM(1),
+    .ENABLE_SHARED_MAILBOX(ENABLE_SHARED_MAILBOX),
     .DCACHE_SET_BITS(DCACHE_SET_BITS),
     .DCACHE_LINE_WRAP(DCACHE_LINE_WRAP),
     .ICACHE_SET_BITS(ICACHE_SET_BITS),
@@ -575,7 +578,7 @@ z486 #(
     .snoop_addr        (dma_snoop_addr),
     .snoop_valid       (dma_snoop_valid),
     .a20_enable        (a20_enable),
-	.cpu_speed_sel     (ctlport[7] ? ctlport[1:0] : cpu_speed_osd),
+	.cpu_speed_sel     (cpu_speed_selected),
 	.fast_off_req      (fast_off),
 	.cache_off_req     (cache_off),
 	.x87_off_req       (x87_off),
@@ -724,7 +727,7 @@ wire        fb_ddram_rd;
 wire  [7:0] fb_ddram_burstcnt;
 
 // Main memory (SDRAM + VGA hole)
-main_memory main_memory (
+main_memory #(.ENABLE_SHARED_MAILBOX(ENABLE_SHARED_MAILBOX)) main_memory (
     .clk               (clk_sys),
     .reset             (reset),
 
@@ -877,6 +880,7 @@ assign dma_readdata      = dma_held_16bit ?
                       : {8'h0, dma_held_addr[0] ? dma_mem_dout[15:8]  : dma_mem_dout[7:0]});
 
 wire [7:0] iobus_readdata8 =
+	( speedctl_cs                            ) ? speedctl_readdata :
 	( zsst_pci_chip_select                    ) ? zsst_pci_readdata :
 	( ide0_cs|ide1_cs                        ) ? (ide0_cs ? ide0_readdata[7:0] : ide1_readdata[7:0]) :
 	( floppy0_cs                             ) ? floppy0_readdata  :
@@ -983,7 +987,7 @@ always @(posedge clk_sys) begin
 		vga_c_cs      <= ({iobus_address_next[15:4], 4'd0} == 16'h03C0);
 		vga_d_cs      <= ({iobus_address_next[15:4], 4'd0} == 16'h03D0);
 		debug_port_cs <= ({iobus_address_next[15:0]      } == 16'h0402);
-		speedctl_cs   <= ({iobus_address_next[15:1], 1'b0} == 16'h8888);
+		speedctl_cs   <= (iobus_address_next[15:3] == (16'h8888 >> 3));
 		fpu_cs        <= (iobus_address_next == 16'h00F0);
 		dotstat_cs    <= (iobus_address_next == 16'h02D8);
 		dotstat2_cs   <= (iobus_address_next == 16'h02D9);
@@ -1010,18 +1014,18 @@ always @(posedge clk_sys) begin
 	end
 end
 
-always @(posedge clk_sys) begin
-	if(reset) begin
-		ctlport <= 0;
-		speedctl_low <= 0;
-	end
-	else if(iobus_write && speedctl_cs) begin
-		if(!iobus_address[0])
-			speedctl_low <= iobus_writedata_byte;
-		else if(iobus_writedata_byte == 8'hA1)
-			ctlport <= speedctl_low;
-	end
-end
+sysctl speed_control (
+    .clk(clk_sys),
+    .reset(reset),
+    .io_address(iobus_address[2:0]),
+    .io_write(iobus_write),
+    .io_cs(speedctl_cs),
+    .io_writedata(iobus_writedata_byte),
+    .io_readdata(speedctl_readdata),
+    .osd_speed(cpu_speed_osd),
+    .speed_sel(cpu_speed_selected),
+    .control(ctlport)
+);
 
 assign syscfg = ctlport;
 

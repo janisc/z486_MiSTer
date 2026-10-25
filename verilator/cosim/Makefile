@@ -28,8 +28,17 @@ vpath %.c $(CPU)
 vpath %.cc $(CPU)/softfloat3e
 vpath %.c $(CPU)/softfloat3e
 
-.PHONY: all clean
+.PHONY: all clean test-x87-pc53
 all: libcosim86.a
+
+obj/test_x87_pc53: test_x87_pc53.c libcosim86.a
+	$(CC) -O2 -I. -o $@ $< libcosim86.a -lstdc++ -lm
+
+test-x87-pc53: obj/test_x87_pc53
+	COSIM_X87_PC53=0 ./obj/test_x87_pc53
+	COSIM_X87_PC53=1 ./obj/test_x87_pc53
+	COSIM_X87_PC53=0 ./obj/test_x87_pc53 single
+	COSIM_X87_PC53=1 ./obj/test_x87_pc53 single
 
 obj/%.o: %.c $(HDRS)
 	@mkdir -p obj

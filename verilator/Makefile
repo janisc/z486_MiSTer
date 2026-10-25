@@ -4,6 +4,11 @@ VERILATOR_BUILD_JOBS ?= 8
 SIM_OPT_LEVEL ?= -O2
 SIM_CLOCK_HZ ?= 20000000
 ENABLE_X87 ?= 1
+MISTERFS_MAIN ?= ../../Main_MiSTer
+ifneq ($(wildcard $(MISTERFS_MAIN)/support/x86/x86_share.cpp),)
+MISTERFS_HOST_SOURCES := misterfs_host.cpp $(abspath $(MISTERFS_MAIN))/support/x86/x86_share.cpp
+MISTERFS_HOST_FLAGS := -DSIM_MISTERFS_HOST=1 -I$(abspath $(MISTERFS_MAIN))
+endif
 OBJ_DIR ?= obj_dir
 EXTRA_SOURCES ?=
 ifeq ($(shell uname -s),Darwin)
@@ -16,7 +21,7 @@ SDL_LIBS=$(shell sdl2-config --libs)
 PNG_CFLAGS=$(shell pkg-config --cflags libpng)
 PNG_LIBS=$(shell pkg-config --libs libpng)
 VERILATOR_X_FLAGS ?=
-VERILATOR_FLAGS = +1800-2017ext+sv --trace-fst --trace-structs --savable --top-module z486_mister_sim --Mdir $(OBJ_DIR) -GCLOCK_RATE_HZ=$(SIM_CLOCK_HZ) -GENABLE_X87=$(ENABLE_X87) --cc --exe $(VERILATOR_X_FLAGS) -CFLAGS "$(SDL_CFLAGS) $(PNG_CFLAGS) $(SIM_OPT_LEVEL) $(SIM_ARCH_FLAGS) -DSIM_SYSTEM_CLOCK_HZ=$(SIM_CLOCK_HZ) -DSIM_ENABLE_X87=$(ENABLE_X87) -std=c++17 -pthread" -LDFLAGS "$(SDL_LIBS) $(PNG_LIBS) -pthread $(abspath $(COSIM_LIB)) -lm" -Wno-WIDTH -Wno-PINMISSING -Wno-COMBDLY -Wno-TIMESCALEMOD -Wno-IMPLICITSTATIC -Wno-CASEOVERLAP -Wno-CASEINCOMPLETE -Wno-UNOPTFLAT -Wno-REALCVT -Wno-ASCRANGE -Wno-MULTIDRIVEN -Wno-LATCH -Wno-BLKANDNBLK -DZ486_ALTERA_ALU=1 -DZ486_COSIM=1
+VERILATOR_FLAGS = +1800-2017ext+sv --trace-fst --trace-structs --savable --top-module z486_mister_sim --Mdir $(OBJ_DIR) -GCLOCK_RATE_HZ=$(SIM_CLOCK_HZ) -GENABLE_X87=$(ENABLE_X87) --cc --exe $(VERILATOR_X_FLAGS) -CFLAGS "$(MISTERFS_HOST_FLAGS) $(SDL_CFLAGS) $(PNG_CFLAGS) $(SIM_OPT_LEVEL) $(SIM_ARCH_FLAGS) -DSIM_SYSTEM_CLOCK_HZ=$(SIM_CLOCK_HZ) -DSIM_ENABLE_X87=$(ENABLE_X87) -std=c++17 -pthread" -LDFLAGS "$(SDL_LIBS) $(PNG_LIBS) -pthread $(abspath $(COSIM_LIB)) -lm" -Wno-WIDTH -Wno-PINMISSING -Wno-COMBDLY -Wno-TIMESCALEMOD -Wno-IMPLICITSTATIC -Wno-CASEOVERLAP -Wno-CASEINCOMPLETE -Wno-UNOPTFLAT -Wno-REALCVT -Wno-ASCRANGE -Wno-MULTIDRIVEN -Wno-LATCH -Wno-BLKANDNBLK -DZ486_ALTERA_ALU=1 -DZ486_COSIM=1
 VERILATOR_INCLUDE = -I../src -I../src/z486 -I../src/z486/x87
 
 D=../src
@@ -38,7 +43,7 @@ SOURCES = $(EXTRA_SOURCES) \
 		  $(DZ)/x87/x87_command_rom.sv \
 		  $(DZ)/x87/x87_control.sv $(DZ)/x87/x87_unit.sv \
 		  $(DZ)/dsp_mul.sv $(DZ)/protection.sv \
-		  $(D)/iobus_adapter.sv $(D)/pic_inta_bridge.sv \
+		  $(D)/iobus_adapter.sv $(D)/pic_inta_bridge.sv $(D)/soc/sysctl.sv \
 		  $(D)/memory/main_memory.sv $(D)/memory/split_sdram_backend.sv $(DZ)/memory.sv $(DZ)/bus_unit.sv $(DZ)/cache_unit.sv $(DZ)/l1_cache.sv $(DZ)/l1_icache.sv $(D)/memory/sdram_sim.v \
 		  $(D)/soc/dma.v $(D)/soc/cdda.v $(D)/soc/floppy.v $(D)/soc/ide.v $(D)/soc/pic.v $(D)/soc/pit_counter.v $(D)/soc/joystick.v \
 		  $(D)/soc/pit.v $(D)/soc/ps2.v $(D)/soc/rtc.v $(D)/soc/vga.v $(D)/soc/dotclk_ce.v $(D)/soc/dot_resync.v $(D)/soc/dot_pll_cfg.v $(D)/soc/svga_linebuf.sv \
@@ -58,7 +63,7 @@ SOURCES = $(EXTRA_SOURCES) \
 		  $(D)/soc/sound/opl3/timers.sv $(D)/soc/sound/opl3/tremolo.sv $(D)/soc/sound/opl3/trick_sw_detection.sv \
 		  $(D)/soc/sound/opl3/vibrato.sv $(D)/soc/sound/opl3/opl3.sv
 
-CPP_SOURCES = main.cpp ide_hps.cpp control_server.cpp cosim_host.cpp snapshot.cpp
+CPP_SOURCES = main.cpp ide_hps.cpp control_server.cpp cosim_host.cpp snapshot.cpp $(MISTERFS_HOST_SOURCES)
 
 # 86Box CPU core as the --cosim reference (C, built in its own directory from
 # an 86Box checkout at $(COSIM_DIR)/86Box). Without the checkout the sim links
@@ -106,7 +111,7 @@ all: $(OBJ_DIR)/Vz486_mister_sim
 $(COSIM_LIB): $(wildcard $(COSIM_DIR)/*.c $(COSIM_DIR)/*.h $(COSIM_CPU)/*.c $(COSIM_CPU)/*.h)
 	$(MAKE) -C $(COSIM_DIR) $(notdir $(COSIM_LIB))
 
-$(OBJ_DIR)/Vz486_mister_sim: $(SOURCES) $(CPP_SOURCES) cosim_host.h snapshot.h zfile.h ide_hps.h gen_state_table.py $(COSIM_LIB) ../src/z486/ucode.hex \
+$(OBJ_DIR)/Vz486_mister_sim: $(SOURCES) $(CPP_SOURCES) misterfs_host.h cosim_host.h snapshot.h zfile.h ide_hps.h gen_state_table.py $(COSIM_LIB) ../src/z486/ucode.hex \
 		../src/z486/pla_entry_rom.hex ../src/z486/pla_group_entry.hex Makefile
 	@# Verilator's own makefile does not see libcosim86.a: relink explicitly.
 	rm -f $@
@@ -146,4 +151,14 @@ clean:
 	rm -rf $(OBJ_DIR) obj_dir_trace
 	rm -f ucode.hex pla_entry_rom.hex pla_group_entry.hex waveform.fst
 
-.PHONY: all run trace sim85 x87 no_x87 x87-50 voodoo clean
+test-cosim-irq-cs: all
+	nasm -f bin tests/cosim_irq_cs_alias.asm -o $(OBJ_DIR)/cosim_irq_cs_alias.img
+	./$(OBJ_DIR)/Vz486_mister_sim --headless --cosim --no-audio-clock \
+		--floppy $(OBJ_DIR)/cosim_irq_cs_alias.img --rtc "2026-10-24 12:00:00" \
+		--stop-on-text COSIM_IRQ_CS_ALIAS_PASS --end 100000000 \
+		> $(OBJ_DIR)/cosim_irq_cs_alias.log 2>&1
+	@! grep -q 'COSIM DIVERGENCE' $(OBJ_DIR)/cosim_irq_cs_alias.log
+	@grep -q 'stop-on-text matched \[COSIM_IRQ_CS_ALIAS_PASS\]' $(OBJ_DIR)/cosim_irq_cs_alias.log
+	@echo "IRQ CS:EIP alias regression passed"
+
+.PHONY: all run trace sim85 x87 no_x87 x87-50 voodoo clean test-cosim-irq-cs

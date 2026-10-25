@@ -154,7 +154,11 @@ pit_counter pit_counter_1(
 );
 
 wire spk_out;
-pit_counter pit_counter_2(
+// Conventional PC speaker setup. The BIOS only programs channel 0, and
+// games such as Might & Magic II write a two-byte divisor without a control
+// word. Start channel 2 in square-wave / LSB+MSB mode; it stays muted until
+// software enables port 61h. Explicit control words still replace this state.
+pit_counter #(.RESET_MODE(3'd3), .RESET_RW_MODE(2'd3)) pit_counter_2(
     .clk                (clk),
     .rst_n              (rst_n),
     

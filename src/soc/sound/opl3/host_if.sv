@@ -69,6 +69,7 @@ module host_if
     logic wr_p2 = 0;
     logic [REG_FILE_DATA_WIDTH-1:0] host_status;
     logic [REG_FILE_DATA_WIDTH-1:0] host_status_p1 = 0;
+    logic opl3_mode = 0;
 
     // relax timing on clk_host
     always_ff @(posedge clk_host) begin
@@ -102,16 +103,24 @@ module host_if
 
         if (!opl3_fifo_empty)
             if (!opl3_address[0]) begin // address write mode
-                opl3_reg_wr.bank_num <= opl3_address[1];
+                // YMF262 aliases the secondary address port to bank 0 while
+                // NEW=0, except 105h (which must remain reachable to set NEW).
+                // Keep the single address latch: data-port A1 is ignored.
+                opl3_reg_wr.bank_num <= opl3_address[1] &&
+                    (opl3_mode || opl3_data == 8'h05);
                 opl3_reg_wr.address <= opl3_data;
             end
             else begin                  // data write mode
                 opl3_reg_wr.data <= opl3_data;
                 opl3_reg_wr.valid <= 1;
+                if (opl3_reg_wr.bank_num && opl3_reg_wr.address == 8'h05)
+                    opl3_mode <= opl3_data[0];
             end
 
-        if (reset)
+        if (reset) begin
             opl3_reg_wr <= 0;
+            opl3_mode <= 0;
+        end
     end
 
     // bits do not need to be coherant, can use synchronizers

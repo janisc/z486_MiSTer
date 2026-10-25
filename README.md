@@ -390,3 +390,9 @@ the files as follows:
 
 Development and compatibility discussion is available in the
 [MiSTer FPGA forum thread](https://misterfpga.org/viewtopic.php?t=10667).
+
+## Shared folders and CPU speed
+
+[MISTERFS](doc/misterfs.md) shares `/media/fat/games/Z486/shared` with DOS using the current ao486 driver. If using EMM386, reserve `CE00-CFFF` before loading the driver.
+
+The OSD offers Full, 56, 30, 15, 6, 5, 4 and 3 MHz-equivalent execution rates. Existing four-speed SYSCTL commands remain compatible; use the OSD for the four new rates. The [SYSCTL interface](doc/sysctl.md) documents core/version detection for future utility updates.

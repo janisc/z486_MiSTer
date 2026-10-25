@@ -1,6 +1,8 @@
 // Main memory mux - most accesses go to SDRAM, VGA accesses go to vga module.
 // nand2mario, 7/2025
-module main_memory (
+module main_memory #(
+    parameter ENABLE_SHARED_MAILBOX = 1'b0
+) (
     input             clk,
     input             reset,
     input      [31:0] cpu_addr,
@@ -72,6 +74,12 @@ reg [31:0] vga_dout;
 reg vga_accepted;
 reg fb_read_high_dword;
 reg fb_linear;              // FB access through the linear aperture (packed dwords)
+reg shared_enabled;
+reg fb_shared;
+reg [7:0] shared_read_left;
+wire shared_rgn = ENABLE_SHARED_MAILBOX && (cpu_addr[31:13] == 19'h67);
+wire shared_unlock = cpu_write && (cpu_addr[12:0] == 13'd0) &&
+                     (&cpu_be[1:0]) && (cpu_din[15:0] == 16'ha345);
 // = 0x0F800000-0x0FBFFFFF: SVGA linear framebuffer, the DDR3 framebuffer
 // itself (as ao486, whose CPU address 248 MB is DDR3 0x3F800000). UniVBE
 // finds it there and reports the ET4000/W32 linear aperture at 248 MB; without
@@ -94,12 +102,12 @@ assign mem_din        = cpu_din;
 assign mem_be         = cpu_be;
 assign mem_burstcount = cpu_burstcount;
 assign mem_line_read  = cpu_line_read;
-assign mem_valid      = cpu_valid && !vga_rgn && !vga_busy && ram_address_in_range(cpu_addr, ram_size);
+assign mem_valid      = cpu_valid && !vga_rgn && !shared_rgn && !vga_busy && ram_address_in_range(cpu_addr, ram_size);
 assign mem_write      = cpu_write;
 
 // CPU acceptance: either SDRAM accepted or VGA accepted
 assign cpu_ready      = mem_ready | vga_accepted |
-                        (cpu_valid && !vga_rgn && !lfb_rgn &&
+                        (cpu_valid && !vga_rgn && !lfb_rgn && !shared_rgn &&
                          !ram_address_in_range(cpu_addr, ram_size) && state == IDLE);
 assign cpu_resp_valid = mem_resp_valid | vga_dout_ready;
 assign cpu_dout       = vga_dout_ready ? vga_dout : mem_dout;
@@ -114,6 +122,7 @@ localparam FB_WRITE = 3;
 localparam FB_READ  = 4;   // issue DDR3 read
 localparam FB_READ_WAIT = 5;   // await read data
 localparam UNMAPPED_READ = 6;
+localparam SHARED_DROP = 7;
 
 // DDR3 framebuffer write: assert WE while in FB_WRITE; accepted when ~busy.
 assign fb_ddram_we       = (state == FB_WRITE);
@@ -148,6 +157,9 @@ wire vga_rgn = (cpu_addr[31:17] == 'h5) && ((cpu_addr[16:15] & vga_mask) == vga_
 
 always @(posedge clk) begin
     if (reset) begin
+        shared_enabled <= 0;
+        fb_shared <= 0;
+        shared_read_left <= 0;
         state <= IDLE;
         vga_busy <= 0;
         vga_dout_ready <= 0;
@@ -197,7 +209,34 @@ always @(posedge clk) begin
                     end
                 end
 
-                if (cpu_valid && !cpu_write && !vga_rgn && !lfb_rgn &&
+                fb_shared <= 0;
+                if (cpu_valid && shared_rgn) begin
+                    vga_accepted <= 1;
+                    vga_busy <= 1;
+                    fb_linear <= 1; // Mailbox bytes are packed, never VGA planes.
+                    if (!shared_enabled && !shared_unlock) begin
+                        // Keep the reserved UMA hole read-only until the stock
+                        // driver's activation write, as on ao486.
+                        if (cpu_write) state <= SHARED_DROP;
+                        else begin
+                            vga_bcnt <= cpu_burstcount == 0 ? 3'd1 : cpu_burstcount[2:0];
+                            state <= UNMAPPED_READ;
+                        end
+                    end else begin
+                        shared_enabled <= 1;
+                        fb_shared <= 1;
+                        fb_ddram_addr <= (32'h3000_0000 | cpu_addr) >> 3;
+                        if (cpu_write) begin
+                            state <= FB_WRITE;
+                            fb_ddram_be <= cpu_addr[2] ? {cpu_be, 4'd0} : {4'd0, cpu_be};
+                            fb_ddram_din <= cpu_addr[2] ? {cpu_din, 32'd0} : {32'd0, cpu_din};
+                        end else begin
+                            state <= FB_READ;
+                            fb_read_high_dword <= cpu_addr[2];
+                            shared_read_left <= cpu_burstcount == 0 ? 8'd1 : cpu_burstcount;
+                        end
+                    end
+                end else if (cpu_valid && !cpu_write && !vga_rgn && !lfb_rgn &&
                     !ram_address_in_range(cpu_addr, ram_size)) begin
                     vga_busy <= 1;
                     vga_bcnt <= cpu_burstcount == 0 ? 3'd1 : cpu_burstcount[2:0];
@@ -326,8 +365,17 @@ always @(posedge clk) begin
                                       fb_ddram_dout[63:32] : fb_ddram_dout[31:0];
                     end
                     vga_dout_ready <= 1;
-                    state <= IDLE;
-                    vga_busy <= 0;
+                    if (fb_shared && shared_read_left > 1) begin
+                        // I-cache line reads still need every dword response,
+                        // even though the shared line is never installed.
+                        shared_read_left <= shared_read_left - 1'b1;
+                        fb_ddram_addr <= fb_ddram_addr + {28'd0, fb_read_high_dword};
+                        fb_read_high_dword <= !fb_read_high_dword;
+                        state <= FB_READ;
+                    end else begin
+                        state <= IDLE;
+                        vga_busy <= 0;
+                    end
                 end
             UNMAPPED_READ: begin
                 vga_dout <= 32'hFFFF_FFFF;
@@ -339,6 +387,10 @@ always @(posedge clk) begin
                 end else begin
                     vga_bcnt <= vga_bcnt - 1'd1;
                 end
+            end
+            SHARED_DROP: begin
+                state <= IDLE;
+                vga_busy <= 0;
             end
             VGA_READ:
                 if (!vga_read) begin

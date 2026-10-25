@@ -51,7 +51,7 @@ module sdram
     output            busy,
     input       [1:0] sdram_size,    // 1/2/3 = 32/64/128MB; 0 uses 32MB geometry
 
-    // 3 requesters, 0 has highest priority (valid/ready handshake)
+    // 3 requesters: DMA (1) before CPU (0), then auxiliary (2).
     input             valid0,       // request valid (held until ready)
     output            ready0,       // 1-cycle pulse: request accepted
     input             wr0,          // 1: write (single dword), 0: read
@@ -287,10 +287,11 @@ always @(posedge clk) begin
     cycle <= (cycle == 5'd31) ? cycle : (cycle + 5'd1);
     refresh_cnt <= refresh_cnt + 1'b1;
 
-    // Request arbiter (valid-based priority)
+    // Audio DMA has a sample deadline; a sustained CPU stream must not starve
+    // it. Arbitrate only in IDLE so an accepted CPU burst still completes.
     new_req = valid0 | valid1 | valid2;
-    req_id  = valid0 ? 2'd0 :
-              valid1 ? 2'd1 : 2'd2;
+    req_id  = valid1 ? 2'd1 :
+              valid0 ? 2'd0 : 2'd2;
     case (req_id)
     2'd0: begin
         req_addr = addr0;
