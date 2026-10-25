@@ -2283,7 +2283,9 @@ end
 // (46 + 2 is a multiple of 3), so the scaler and the capture sample the right
 // pixel. With both at 45 the last column was blanked and the picture sat one
 // pixel to the right in the scaler, release 7 to 13.)
-wire [7:0] vid_delay = fb_native24 ? 8'd46 : (seq_8dot_char ? 8'd16 : 8'd27) << seq_dotclock_divided;
+// One less than the dot count above: the delay line's read is registered once more below (the RAM's
+// output register, then the output registers), so the picture keeps the position it had.
+wire [7:0] vid_delay = (fb_native24 ? 8'd46 : (seq_8dot_char ? 8'd16 : 8'd27) << seq_dotclock_divided) - 8'd1;
 reg [24:0] vid_dly [0:255];
 reg  [7:0] vid_wr;
 reg        vid_blank_24;     // native 24bpp: the blanking two dots behind the pixels (one register here, one below)
@@ -2295,18 +2297,22 @@ generate if (ONDEMAND_SCANOUT) begin : g_out_ondemand
 		if (scanline_request_accept) vga_blank_n <= 1'b0;
 	end
 end else begin : g_out_delayed
-	// The blanking leaves with the pixels it belongs to: in the native 24bpp mode two dots
-	// behind them (the two registers), in every other mode in the same register write as
-	// the pixels. (Release 14 took it from vid_blank_n_q, one dot behind the pixels, in
-	// every mode but 24bpp: the first dot of each line was cut and the last column black.)
-	reg vid_blank_n_q;
-	wire [24:0] vid_rd = vid_dly[vid_wr - vid_delay];
+	// The delay line is read into one register (vid_q: the RAM's output register, which keeps
+	// Quartus inferring a RAM; a wire read turned it into 6,400 registers), and the pixels and
+	// the blanking leave from there together: in every mode but 24bpp in the same register
+	// write, in native 24bpp the blanking two dots behind the pixels (vid_blank_24, _24b).
+	// (Release 14 had the other modes' blanking one dot behind the pixels: the first dot of
+	// each line was cut and the last column black.)
+	reg [24:0] vid_q;
+	reg        vid_blank_24b;
 	always @(posedge clk_vga) if (render_ce) begin
 		vid_dly[vid_wr] <= {vga_r_pre, vga_g_pre, vga_b_pre, vga_blank_n_pre};
 		vid_wr <= vid_wr + 1'd1;
-		{vga_r, vga_g, vga_b, vid_blank_n_q} <= vid_rd;
-		vid_blank_24 <= vid_blank_n_q;
-		vga_blank_n  <= fb_native24 ? vid_blank_24 : vid_rd[0];
+		vid_q <= vid_dly[vid_wr - vid_delay];
+		{vga_r, vga_g, vga_b} <= vid_q[24:1];
+		vid_blank_24  <= vid_q[0];
+		vid_blank_24b <= vid_blank_24;
+		vga_blank_n   <= fb_native24 ? vid_blank_24b : vid_q[0];
 	end
 end endgenerate
 
