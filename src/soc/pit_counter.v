@@ -24,7 +24,10 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-module pit_counter(
+module pit_counter #(
+    parameter [2:0] RESET_MODE = 3'd2,
+    parameter [1:0] RESET_RW_MODE = 2'd1
+)(
     input             clk,
     input             rst_n,
     
@@ -84,7 +87,7 @@ end
 // Mode 5: Hardware triggered strobe (retriggerable)
 reg [2:0] mode;
 always @(posedge clk) begin
-    if(!rst_n)                mode <= 3'd2;
+    if(!rst_n)                mode <= RESET_MODE;
     else if(set_control_mode) mode <= data_in[3:1];
 end
 
@@ -93,7 +96,7 @@ end
 // Read/Write mode 3: Read/Write least significant byte first, then most significant byte (LSB/MSB)
 reg [1:0] rw_mode;
 always @(posedge clk) begin
-    if(!rst_n)                rw_mode <= 2'd1;
+    if(!rst_n)                rw_mode <= RESET_RW_MODE;
     else if(set_control_mode) rw_mode <= data_in[5:4];
 end
 

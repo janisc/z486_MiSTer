@@ -48,7 +48,8 @@ module tb_pit_io;
     wire pit_cs = ({io_address[15:2], 2'b00} == 16'h0040) ||
                   (io_address == 16'h0061);
 
-    pit dut (
+    wire speaker_out;
+    pit #(.CLOCK_RATE(85_000_000)) dut (
         .clk(clk),
         .rst_n(reset_n),
         .irq(),
@@ -57,8 +58,7 @@ module tb_pit_io;
         .io_readdata(pit_readdata),
         .io_write(io_write && pit_cs),
         .io_writedata(io_writedata),
-        .speaker_out(),
-        .clock_rate(28'd85000000)
+        .speaker_out(speaker_out)
     );
 
     task automatic io_write8(input [15:0] port, input [7:0] value);
@@ -91,6 +91,9 @@ module tb_pit_io;
 
     reg [7:0] count_l;
     reg [7:0] count_h;
+    reg [7:0] speaker_status;
+    integer speaker_high;
+    integer speaker_low;
     initial begin
         cpu_addr = 0;
         cpu_be = 0;
@@ -113,6 +116,39 @@ module tb_pit_io;
         $display("PIT latched count read: %02x%02x", count_h, count_l);
         if ({count_h, count_l} < 16'h3fe0 || {count_h, count_l} > 16'h3fff)
             $fatal(1, "PIT count bytes are stale or incoherent");
+
+        // MM2 writes channel 2's divisor without first writing a control
+        // word. A cold boot must provide the same usable speaker state as
+        // a preceding speaker program: mode 3, binary, LSB then MSB.
+        io_write8(16'h0043, 8'he8); // latch channel-2 status only
+        io_read8(16'h0042, speaker_status);
+        if (speaker_status[5:0] != 6'h36)
+            $fatal(1, "cold speaker control = %02x, expected mode 3 / LSB+MSB", speaker_status);
+        io_write8(16'h0042, 8'h34);
+        io_write8(16'h0042, 8'h12);
+        io_write8(16'h0043, 8'h80); // latch channel-2 count, gate still low
+        io_read8(16'h0042, count_l);
+        io_read8(16'h0042, count_h);
+        if ({count_h, count_l} != 16'h1234)
+            $fatal(1, "cold speaker lost a divisor byte: %02x%02x", count_h, count_l);
+
+        io_write8(16'h0042, 8'h40);
+        io_write8(16'h0042, 8'h00);
+        io_write8(16'h0061, 8'h03);
+        repeat (5000) @(posedge clk);
+        speaker_high = 0;
+        speaker_low = 0;
+        repeat (20000) begin
+            @(posedge clk);
+            if (speaker_out) speaker_high++;
+            else speaker_low++;
+        end
+        if (speaker_high < 8000 || speaker_high > 12000 || speaker_low < 8000)
+            $fatal(1, "speaker is not a square wave: high=%0d low=%0d", speaker_high, speaker_low);
+        io_write8(16'h0061, 8'h00);
+        repeat (10) @(posedge clk);
+        if (speaker_out) $fatal(1, "speaker mute failed");
+        $display("PIT cold-speaker readback and waveform pass");
         $finish;
     end
 endmodule
