@@ -654,6 +654,7 @@ system #(
 	.ICACHE_SET_BITS(ICACHE_SET_BITS),
 	.ENABLE_X87(ENABLE_X87),
 	.ENABLE_CMS(ENABLE_CMS),
+	.ENABLE_SHARED_MAILBOX(1'b1),
 	// DE10-Nano deliberately remains the PC-only build.
 	.ENABLE_VOODOO(1'b0)
 ) core (

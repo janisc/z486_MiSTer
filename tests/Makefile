@@ -3,6 +3,16 @@ OBJ_DIR := obj_dir
 
 .PHONY: test clean
 
+.PHONY: test-misterfs
+test-misterfs: $(OBJ_DIR)/Vtb_misterfs_mailbox
+	./$(OBJ_DIR)/Vtb_misterfs_mailbox
+
+test: test-misterfs
+
+$(OBJ_DIR)/Vtb_misterfs_mailbox: tb_main_memory_svga.sv ../src/memory/main_memory.sv | $(OBJ_DIR)
+	$(VERILATOR) --binary --timing -Wno-fatal --Mdir $(OBJ_DIR)/misterfs_mailbox \
+		--top-module tb_main_memory_svga -GENABLE_SHARED_MAILBOX=1 $^ -o ../Vtb_misterfs_mailbox
+
 .PHONY: test-speed
 test-speed: $(OBJ_DIR)/Vtb_cpu_throttle $(OBJ_DIR)/Vtb_sysctl_io
 	./$(OBJ_DIR)/Vtb_cpu_throttle

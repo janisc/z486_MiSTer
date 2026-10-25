@@ -240,6 +240,7 @@ parameter DCACHE_LINE_WRAP = 1'b0;
 parameter ICACHE_SET_BITS = 8;   // icache size: 8 = 16KB, 7 = 8KB
 parameter ENABLE_X87 = 1'b0;
 parameter ENABLE_CMS = 1'b1;
+parameter ENABLE_SHARED_MAILBOX = 1'b0; // MiSTer enables its live HPS DDR mailbox.
 parameter VGA_USE_URAM = 1'b0;
 parameter VGA_ONDEMAND_SCANOUT = 1'b0;
 parameter ENABLE_VOODOO = 1'b0;
@@ -501,6 +502,7 @@ wire        cpu_triple_fault_reset;
 
 z486 #(
     .PROTECT_UMA_ROM(1),
+    .ENABLE_SHARED_MAILBOX(ENABLE_SHARED_MAILBOX),
     .DCACHE_SET_BITS(DCACHE_SET_BITS),
     .DCACHE_LINE_WRAP(DCACHE_LINE_WRAP),
     .ICACHE_SET_BITS(ICACHE_SET_BITS),
@@ -683,7 +685,7 @@ wire        fb_ddram_rd;
 wire  [7:0] fb_ddram_burstcnt;
 
 // Main memory (SDRAM + VGA hole)
-main_memory main_memory (
+main_memory #(.ENABLE_SHARED_MAILBOX(ENABLE_SHARED_MAILBOX)) main_memory (
     .clk               (clk_sys),
     .reset             (reset),
 

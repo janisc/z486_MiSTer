@@ -1,6 +1,6 @@
 `timescale 1ns / 1ps
 
-module tb_main_memory_svga;
+module tb_main_memory_svga #(parameter ENABLE_SHARED_MAILBOX = 0);
     logic clk = 0;
     logic reset = 1;
     always #5 clk = ~clk;
@@ -57,7 +57,10 @@ module tb_main_memory_svga;
     logic [7:0] fb_ddram_burstcnt;
     logic fb_ddram_busy = 0;
 
-    main_memory dut (.*);
+    main_memory #(.ENABLE_SHARED_MAILBOX(ENABLE_SHARED_MAILBOX)) dut (.*);
+    logic [63:0] shared_mem [0:1023];
+    wire shared_ddr = (fb_ddram_addr >= (32'h300ce000 >> 3)) &&
+                      (fb_ddram_addr < (32'h300d0000 >> 3));
 
     // ------------------------------------------------------------- DDR3 model
     // Avalon-MM slave semantics: a read is accepted only in a cycle where the
@@ -70,10 +73,44 @@ module tb_main_memory_svga;
         fb_ddram_dout_ready <= 0;
         if (fb_ddram_rd && !fb_ddram_busy) begin
             fb_accepts <= fb_accepts + 1;
-            fb_ddram_dout <= 64'h8877_6655_4433_2211;
+            fb_ddram_dout <= shared_ddr ? shared_mem[fb_ddram_addr[9:0]] :
+                                            64'h8877_6655_4433_2211;
             fb_ddram_dout_ready <= 1;
         end
+        if (fb_ddram_we && !fb_ddram_busy && shared_ddr)
+            for (integer b = 0; b < 8; b++)
+                if (fb_ddram_be[b])
+                    shared_mem[fb_ddram_addr[9:0]][8*b +: 8] <= fb_ddram_din[8*b +: 8];
     end
+
+    task automatic shared_access(input logic wr, input logic [31:0] address,
+                                  input logic [3:0] be, input logic [31:0] data,
+                                  input integer beats, input logic [127:0] expected);
+        integer n;
+        @(negedge clk);
+        cpu_addr = address;
+        cpu_write = wr;
+        cpu_be = be;
+        cpu_din = data;
+        cpu_burstcount = 8'(beats);
+        cpu_valid = 1;
+        do @(negedge clk); while (!cpu_ready);
+        cpu_valid = 0;
+        if (!wr) begin
+            n = 0;
+            while (n < beats) begin
+                @(negedge clk);
+                if (cpu_resp_valid) begin
+                    if (cpu_dout !== expected[32*n +: 32])
+                        $fatal(1, "mailbox %08x beat %0d: got %08x expected %08x",
+                               address, n, cpu_dout, expected[32*n +: 32]);
+                    n++;
+                end
+            end
+        end
+        do @(negedge clk); while (dut.vga_busy);
+        repeat (2) @(negedge clk);
+    endtask
 
     // ---------------------------------------------------------------- helpers
 
@@ -290,6 +327,44 @@ module tb_main_memory_svga;
         fb_read_under_busy(7, 32'h000A_0000);
         $display("PASS: FB_READ holds the DDR3 read until it is accepted (busy 1/2/7 cycles)");
 
+        if (ENABLE_SHARED_MAILBOX) begin
+            for (integer i = 0; i < 1024; i++) shared_mem[i] = 0;
+            fb_ddram_busy = 0;
+            shared_access(0, 32'hce000, 4'hf, 0, 1, 128'hffffffff);
+            shared_access(1, 32'hce000, 4'h3, 32'h1234, 1, 0);
+            if (shared_mem[0] != 0) $fatal(1, "reserved ROM writable before activation");
+            // Stall the activation write; it must stay asserted until accepted.
+            fork
+                shared_access(1, 32'hce000, 4'h3, 32'ha345, 1, 0);
+                begin
+                    fb_ddram_busy = 1;
+                    repeat (12) @(negedge clk);
+                    fb_ddram_busy = 0;
+                end
+            join
+            if (shared_mem[0] != 64'ha345) $fatal(1, "activation address/byte enables wrong");
+            shared_mem[0][63:32] = 32'h12345678;
+            shared_access(0, 32'hce004, 4'hf, 0, 1, 128'h12345678);
+            shared_mem[0][63:32] = 32'habcd4321;
+            shared_access(0, 32'hce004, 4'hf, 0, 1, 128'habcd4321);
+            shared_access(1, 32'hce000, 4'hc, 32'ha55a0000, 1, 0);
+            shared_access(0, 32'hce000, 4'hf, 0, 1, 128'ha55aa345);
+            shared_access(1, 32'hcfffC, 4'hf, 32'hcafef00d, 1, 0);
+            shared_access(0, 32'hcfffC, 4'hf, 0, 1, 128'hcafef00d);
+            shared_mem[2] = 64'h22222222_11111111;
+            shared_mem[3] = 64'h44444444_33333333;
+            shared_access(0, 32'hce010, 4'hf, 0, 4,
+                          128'h44444444_33333333_22222222_11111111);
+            shared_access(0, 32'h0f800000, 4'hf, 0, 1, 128'h44332211);
+            @(negedge clk);
+            reset = 1;
+            repeat (3) @(negedge clk);
+            reset = 0;
+            shared_access(0, 32'hce000, 4'hf, 0, 1, 128'hffffffff);
+            shared_access(1, 32'hce000, 4'h3, 32'ha345, 1, 0);
+            shared_access(0, 32'hce004, 4'hf, 0, 1, 128'habcd4321);
+            $display("PASS: MISTERFS mailbox activation, host updates, lanes, boundaries, bursts, reset");
+        end
         $finish;
     end
 
