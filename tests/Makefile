@@ -4,6 +4,8 @@ OBJ_DIR := obj_dir
 .PHONY: test clean
 
 test: $(OBJ_DIR)/Vtb_iobus_adapter $(OBJ_DIR)/Vtb_floppy_io $(OBJ_DIR)/Vtb_pit_io $(OBJ_DIR)/Vtb_rtc_ram_size $(OBJ_DIR)/Vtb_sdram_size $(OBJ_DIR)/Vtb_sdram_partial $(OBJ_DIR)/Vtb_main_memory_svga $(OBJ_DIR)/Vtb_vga_fb_dimensions $(OBJ_DIR)/Vtb_vga_ondemand_mode13 $(OBJ_DIR)/Vtb_vga_dword_write $(OBJ_DIR)/Vtb_vga_plane_ram $(OBJ_DIR)/Vtb_mt32pi
+	./$(OBJ_DIR)/Vtb_opl_host_if
+	./$(OBJ_DIR)/Vtb_opl3_sbpro
 	./$(OBJ_DIR)/Vtb_iobus_adapter
 	./$(OBJ_DIR)/Vtb_floppy_io
 	./$(OBJ_DIR)/Vtb_pit_io
@@ -16,6 +18,19 @@ test: $(OBJ_DIR)/Vtb_iobus_adapter $(OBJ_DIR)/Vtb_floppy_io $(OBJ_DIR)/Vtb_pit_i
 	./$(OBJ_DIR)/Vtb_vga_dword_write
 	./$(OBJ_DIR)/Vtb_vga_plane_ram
 	./$(OBJ_DIR)/Vtb_mt32pi
+
+test: $(OBJ_DIR)/Vtb_opl_host_if $(OBJ_DIR)/Vtb_opl3_sbpro
+
+OPL_DIR := ../src/soc/sound/opl3
+OPL_SOURCES := $(OPL_DIR)/opl3_pkg.sv $(filter-out $(OPL_DIR)/opl3_pkg.sv,$(wildcard $(OPL_DIR)/*.sv)) $(OPL_DIR)/afifo.v ../src/common/synchronizer.sv
+
+$(OBJ_DIR)/Vtb_opl3_sbpro: tb_opl3_sbpro.sv $(OPL_SOURCES) | $(OBJ_DIR)
+	$(VERILATOR) --binary --timing -Wno-fatal --Mdir $(OBJ_DIR)/opl3_sbpro \
+		--top-module tb_opl3_sbpro $(OPL_SOURCES) $< -o ../Vtb_opl3_sbpro
+
+$(OBJ_DIR)/Vtb_opl_host_if: ../src/soc/sound/opl3/opl3_pkg.sv tb_opl_host_if.sv ../src/soc/sound/opl3/host_if.sv ../src/soc/sound/opl3/trick_sw_detection.sv ../src/soc/sound/opl3/afifo.v ../src/common/synchronizer.sv | $(OBJ_DIR)
+	$(VERILATOR) --binary --timing -Wno-fatal --Mdir $(OBJ_DIR)/opl_host_if \
+		--top-module tb_opl_host_if $^ -o ../Vtb_opl_host_if
 
 $(OBJ_DIR)/Vtb_mt32pi: tb_mt32pi.sv ../sys/mt32pi.sv | $(OBJ_DIR)
 	$(VERILATOR) --binary --timing -Wno-fatal --Mdir $(OBJ_DIR)/mt32pi \
