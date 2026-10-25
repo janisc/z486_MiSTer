@@ -2295,13 +2295,18 @@ generate if (ONDEMAND_SCANOUT) begin : g_out_ondemand
 		if (scanline_request_accept) vga_blank_n <= 1'b0;
 	end
 end else begin : g_out_delayed
+	// The blanking leaves with the pixels it belongs to: in the native 24bpp mode two dots
+	// behind them (the two registers), in every other mode in the same register write as
+	// the pixels. (Release 14 took it from vid_blank_n_q, one dot behind the pixels, in
+	// every mode but 24bpp: the first dot of each line was cut and the last column black.)
 	reg vid_blank_n_q;
+	wire [24:0] vid_rd = vid_dly[vid_wr - vid_delay];
 	always @(posedge clk_vga) if (render_ce) begin
 		vid_dly[vid_wr] <= {vga_r_pre, vga_g_pre, vga_b_pre, vga_blank_n_pre};
 		vid_wr <= vid_wr + 1'd1;
-		{vga_r, vga_g, vga_b, vid_blank_n_q} <= vid_dly[vid_wr - vid_delay];
+		{vga_r, vga_g, vga_b, vid_blank_n_q} <= vid_rd;
 		vid_blank_24 <= vid_blank_n_q;
-		vga_blank_n  <= fb_native24 ? vid_blank_24 : vid_blank_n_q;
+		vga_blank_n  <= fb_native24 ? vid_blank_24 : vid_rd[0];
 	end
 end endgenerate
 
