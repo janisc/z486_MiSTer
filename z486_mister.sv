@@ -148,7 +148,7 @@ localparam CONF_STR = {
 	"P2-;",
 	"P2oTU,RAM Size,64MB,128MB,16MB,32MB;", // Lowercase 'o' maps T/U to status[62:61].
 	"P2-;",
-	"P2O89,CPU Speed,Full,56 MHz,30 MHz,15 MHz;",
+	"P2O8A,CPU Speed,Full,56 MHz,30 MHz,15 MHz,6 MHz,5 MHz,4 MHz,3 MHz;",
 	"P2O[96],L1 Cache,On,Off;",
 	"P2O[97],x87 FPU,On,Off (at reset);",
 	"P2O[95],CPU Pipeline,Fast,Compatible;",
@@ -196,7 +196,7 @@ wire        reset_req = buttons[1] | status[0];
 reg  [2:0]  reset_sync_r = 3'b111;
 
 wire [127:0] status;
-wire  [1:0] cpu_speed_osd = {status[9] ^ status[8], status[8]};
+wire  [2:0] cpu_speed_osd = status[10:8]; // Original four OSD encodings are unchanged.
 wire  [1:0] buttons;
 wire [10:0] ps2_key;
 wire [24:0] ps2_mouse;

@@ -3,6 +3,24 @@ OBJ_DIR := obj_dir
 
 .PHONY: test clean
 
+.PHONY: test-speed
+test-speed: $(OBJ_DIR)/Vtb_cpu_throttle $(OBJ_DIR)/Vtb_sysctl_io
+	./$(OBJ_DIR)/Vtb_cpu_throttle
+	./$(OBJ_DIR)/Vtb_sysctl_io
+
+test: test-speed
+
+$(OBJ_DIR)/Vtb_cpu_throttle: tb_cpu_throttle.sv ../src/z486/cpu_throttle.sv | $(OBJ_DIR)
+	$(VERILATOR) --binary --timing -Wno-fatal --Mdir $(OBJ_DIR)/cpu_throttle \
+		--top-module tb_cpu_throttle $^ -o ../Vtb_cpu_throttle
+
+$(OBJ_DIR)/Vtb_sysctl_io: tb_sysctl_io.sv ../src/iobus_adapter.sv ../src/soc/sysctl.sv | $(OBJ_DIR)
+	$(VERILATOR) --binary --timing -Wno-fatal --Mdir $(OBJ_DIR)/sysctl_io \
+		--top-module tb_sysctl_io $^ -o ../Vtb_sysctl_io
+
+$(OBJ_DIR)/sysctl_probe.img: programs/sysctl_probe.asm | $(OBJ_DIR)
+	nasm -f bin $< -o $@
+
 test: $(OBJ_DIR)/Vtb_iobus_adapter $(OBJ_DIR)/Vtb_floppy_io $(OBJ_DIR)/Vtb_pit_io $(OBJ_DIR)/Vtb_rtc_ram_size $(OBJ_DIR)/Vtb_sdram_size $(OBJ_DIR)/Vtb_sdram_partial $(OBJ_DIR)/Vtb_main_memory_svga $(OBJ_DIR)/Vtb_vga_fb_dimensions $(OBJ_DIR)/Vtb_vga_ondemand_mode13 $(OBJ_DIR)/Vtb_vga_dword_write $(OBJ_DIR)/Vtb_vga_plane_ram $(OBJ_DIR)/Vtb_mt32pi
 	./$(OBJ_DIR)/Vtb_opl_host_if
 	./$(OBJ_DIR)/Vtb_opl3_sbpro
