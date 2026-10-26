@@ -184,14 +184,19 @@ hand on the release binary. The test tools (register dumps, retrace counters, VR
 INT 10h logger, the GUS memory tests) and the debug floppy are described in
 [`builds/BUILDS.md`](builds/BUILDS.md). Release 14 (the pixel clock) was checked
 with the fork's own test programs in every mode on a VGA CRT, a 15 kHz TV and an
-HDMI-to-VGA adapter, not through the game list; it is a big change to the video
-path, so reports are welcome.
+HDMI-to-VGA adapter, not through the game list, and still shipped a one-dot cut that
+the owner's eye caught in FastDoom's startup text. Release 15 added the probe that
+would have caught it (a line of block characters and a pixel ruler, measured column
+by column on the capture in every mode class) and was spot-checked by hand; the game
+list was not run, so reports are welcome.
 
 **Which z486 is this built on, and what is known not to work?**
-Release 14 is built on the same z486 20261012 as release 13; what changed is the
-fork's own video path (the pixel clock, above) and a 24-bit fix: the picture sat one
-pixel to the right of its window and the last column was black, since release 7.
-Release 13 was built on z486 20261012; everything new in it was upstream's work. The
+Release 15 is built on z486 20261025 (the shared folder, the lower CPU speeds and
+the game fixes above). Release 14 was built on z486 20261012 like release 13; what
+changed in it was the fork's own video path (the pixel clock) and a 24-bit fix: the
+picture sat one pixel to the right of its window and the last column was black, since
+release 7. Release 13 was built on z486 20261012; everything new in it was upstream's
+work. The
 CPU gained real x87 transcendentals (FSINCOS, FPREM1, FXTRACT and FYL2XP1 were no-ops
 before), FST ST(i), FFREEP and FBLD, hardware breakpoints, a faster memory path and a
 set of game fixes (SHLD/SHRD with 16-bit operands, the TSS access flag, MOV to the
@@ -266,7 +271,24 @@ trade-offs, said plainly: it is a big change to the video path, so there may be 
 the tests did not reach, and an issue with the mode and a photo is the best help;
 and the clock reprogramming costs about a thousand logic cells, so the core is at
 98 % of the chip with no idea yet of how to make that smaller.
-[docs/DOT_CLOCK.md](docs/DOT_CLOCK.md) has the engineering.
+[docs/DOT_CLOCK.md](docs/DOT_CLOCK.md) has the engineering. Release 14 itself shipped
+with a one-dot cut at the left of every line in all modes but 24-bit (a slip in its
+24-bit fix, not the clock); release 15 corrects it, see the next entry.
+
+**What changed in release 15?**
+Two things. The cut dot of release 14: the window that gates the picture opened one
+dot after the pixels in every mode but 24-bit colour, so the first pixel column was
+missing and the last column black, on the analog port, the TV and HDMI alike (in
+text: one-pixel left stems on M, P and R in the first column). The blanking is back
+with its pixels, measured column by column in text, 13h, 640x480, 24-bit and
+1024x768. And z486 20261025 underneath, all of it upstream's work: a shared folder
+with DOS through MISTERFS (`/media/fat/games/Z486/shared` as a DOS drive: the
+current ao486 `MISTERFS.EXE` on the DOS disk, `X=CE00-CFFF` on the EMM386 line,
+`MISTERFS E /Q`; MiSTer main 20260823 or newer), four lower CPU speeds in the OSD (6,
+5, 4 and 3 MHz-equivalent) for speed-sensitive software, and fixes for Might and Magic
+II's speaker music, Fistfight's false "INI file corrupt" error, Dragonsphere's intro
+music, Discworld II's movie-audio clicks and the x87's rounding status bit. Nothing
+in the settings resets.
 
 ## How it works
 

@@ -1,2 +1,2 @@
-31d9f9c72cbfbb4d1db6120ed25f999320e36ae0
-build 3 of exp/upstream-20261025 (the blanking fix, production profile, seed 6, all processors); build 1 d0cae82 had the release 14 blanking cut
+1f43b8a7baad0fafa971950eb24dd6655e31a14e
+build 4 = the 2026-10-26 sweep's seed 6 (3 processors; RTL = 31d9f9c, the blanking fix): the release 15 binary. Build 3 (seed 6, all processors) was the owner's test core 2026-10-25 23:15 to 2026-10-26 morning.

@@ -24,9 +24,15 @@ Not tested by the author: a RetroTINK-4K or a Morph on the direct-video output (
 numbers say it should be pixel-exact now; reports are welcome), and the HDMI scaler's behaviour at
 mode switches over a long session (the scaler sees a new input clock at each switch, like it does
 on cores that switch their video PLL). No game list was run on the release binary beyond the
-owner's usual spot checks. The core sits at 98 % of the device, see "Cost". The release also
-carries a fix for a 24bpp bug present since release 7 (the picture sat one pixel right of its
-blanking window and the last column was black); that fix is independent of the dot clock.
+owner's usual spot checks. The core sits at 98 % of the device, see "Cost". Release 14 also
+carried a fix for a 24bpp bug present since release 7 (the picture sat one pixel right of its
+blanking window and the last column was black), and that fix had a slip of its own: it routed
+every other mode's blanking through one of the two registers meant for 24bpp, so release 14
+cut the first dot of every line in all modes but 24bpp. Release 15 reads the delay line into
+one register and takes the pixels and the blanking from it together (the RAM form; a wire read
+turned the line into registers and the design no longer fit), measured exact afterwards with a
+line of block characters and the DOTMODE ruler in text, 13h, 101h, 112h and 117h. The lesson is
+in the testing: a probe for every mode class, not only the one being fixed.
 
 ## Why
 
