@@ -73,7 +73,8 @@ nothing was wrong, which is why Second Reality and the module players sounded ri
 Voice register accesses are not affected: the model latches their register number at
 `clk_sel[4]` and their data before `clk_sel[9]`, and a write that arrives in the overlap is put
 off to the next round, not dropped. DMA transfers are not affected either; the model already ends
-those on an edge.
+those on an edge (the model's own DMA read strobe had a level-sensitivity of its own, fixed in
+release 16: see "What was tested").
 
 The cure is in the wrapper, and `gf1.v` stays as it is: an I/O strobe is passed on to the model
 only while the model is outside its memory cycles (`dram_access` low). An access that arrives
@@ -201,7 +202,12 @@ Hardware (DE10-Nano, the Future Crew demo disk with Gravis's software and `ULTRA
   memory, card memory and voice registers back while the picture is shown. No mismatch (15 million
   picture bytes, 2 to 6 million card bytes per run), and the picture is bit-identical with and
   without the voices. A 4 KB DMA upload is correct with the SVGA mode on screen. This is the test
-  that found the fault of the first version (see "What the held clock asks for").
+  that found the fault of the first version (see "What the held clock asks for");
+- 2026-10-27: a 4 KB block written through the DRAM port and read back by a GUS-to-PC DMA on
+  channel 7 (`GUSDMA.COM`, in the owner's test harness): release 15 returned 4,081 of 4,096 bytes
+  wrong (each value about six times over, the stream behind) because the read strobe
+  `cls9_dma_read` was level-sensitive within its clock slot; with xolod79's edge term from ao486
+  (PR #237) in `gf1.v`, 0 of 4,096 wrong on four passes. Uploads were never affected. Release 16.
 
 ## Known gaps
 

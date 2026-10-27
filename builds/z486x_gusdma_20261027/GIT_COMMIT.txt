@@ -1,2 +1,2 @@
 b1a07ccead56511b6d0f14976229740f328298c9
-build 1 of exp/gus-dma-read (production profile, seed 6, all processors): release 15 + the GUS DMA read strobe fix
+build 2 of exp/gus-dma-read (production profile, fitter seed 1 of the five-seed sweep of 2026-10-27, three processors): release 15 + the GUS DMA read strobe fix = release 16 (z486nv_20261027)

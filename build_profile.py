@@ -102,7 +102,7 @@ PROFILES: dict[str, Profile] = {
             ("OPTIMIZE_POWER_DURING_SYNTHESIS", "OFF"),
             ("ROUTER_REGISTER_DUPLICATION", "ON"),
             ("FITTER_AGGRESSIVE_ROUTABILITY_OPTIMIZATION", "ALWAYS"),
-            ("SEED", "6"),
+            ("SEED", "1"),
         ),
     ),
 }

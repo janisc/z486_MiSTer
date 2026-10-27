@@ -191,8 +191,10 @@ by column on the capture in every mode class) and was spot-checked by hand; the 
 list was not run, so reports are welcome.
 
 **Which z486 is this built on, and what is known not to work?**
-Release 15 is built on z486 20261025 (the shared folder, the lower CPU speeds and
-the game fixes above). Release 14 was built on z486 20261012 like release 13; what
+Releases 15 and 16 are built on z486 20261025 (the shared folder, the lower CPU
+speeds and the game fixes above); release 16 differs from 15 by one line in the
+Gravis UltraSound, see the last entry of this list. Release 14 was built on z486
+20261012 like release 13; what
 changed in it was the fork's own video path (the pixel clock) and a 24-bit fix: the
 picture sat one pixel to the right of its window and the last column was black, since
 release 7. Release 13 was built on z486 20261012; everything new in it was upstream's
@@ -289,6 +291,18 @@ current ao486 `MISTERFS.EXE` on the DOS disk, `X=CE00-CFFF` on the EMM386 line,
 II's speaker music, Fistfight's false "INI file corrupt" error, Dragonsphere's intro
 music, Discworld II's movie-audio clicks and the x87's rounding status bit. Nothing
 in the settings resets.
+
+**What changed in release 16?**
+One line, in the Gravis UltraSound. A DMA transfer from the card's memory to the PC
+(the direction a program uses to read samples back; uploads go the other way and were
+always right) came back garbled, every value repeated about six times and the stream
+behind. The card model raised its read request for the whole of its clock slot
+instead of once at the slot's edge, as the write side already did, so it answered each
+request several times over. The fix is xolod79's, from ao486 (ao486_MiSTer PR #237);
+the fork's GUS is otherwise unchanged. A read-back test (4 KB written through the
+card's memory port, fetched back by DMA, compared) goes from 4,081 bytes wrong of
+4,096 to none. Everything else is release 15: the same z486 20261025 underneath, the
+same video path, nothing in the settings resets.
 
 ## How it works
 
