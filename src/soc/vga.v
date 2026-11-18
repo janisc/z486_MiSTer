@@ -2267,16 +2267,31 @@ end
 
 // A real VGA card has a pipeline between the CRTC and the DAC that the sync
 // signals do not pass through, so its pixels come out later than the raw CRTC
-// timing: two 8-dot characters in graphics modes (640x480: 32 dots of CRTC
-// back porch + 16 = the standard 48) and three 9-dot characters in text mode
-// (720x400: 27 + 27 = the standard 54). Both put the picture 5.7 us after the
-// hsync leading edge, so one monitor preset fits every DOS mode. This block
-// was tuned for the scaler, where only pixel/DE alignment matters, and emits
-// pixels with the same latency as the sync. Delay pixels and DE together by
-// that amount (doubled when the dot clock is divided, EGA-style modes). Sync
-// is untouched and pixels stay aligned to DE, so the scaler path does not
-// move. The delay line is a small RAM addressed by a free-running dot counter.
-// (native 24bpp: 16 dots of 25 MHz = 48 dots at the tripled clock. The pixel
+// timing: two character clocks in graphics modes, three in text modes. IBM's
+// register sets count on it: with those delays the picture starts 144 dots
+// after the hsync leading edge in every graphics mode (640x480: sync 96 + the
+// standard back porch 48) and 162 dots in text (720x400: 108 + 54). That holds
+// for the 40-column sets as well, whose sync is longer (112 and 126 dots) and
+// ends at the line wrap, so their back porch is 32 and 36 dots. One monitor
+// preset fits every DOS mode.
+// This block was tuned for the scaler, where only pixel/DE alignment matters:
+// it emits pixels with the same latency as the sync, and it opens the display
+// window (and the blanking around it) one character less one dot before the
+// CRTC's line wrap. Delay pixels and DE together by the sum: three characters
+// less one dot in graphics modes, four less one dot in text, a character being
+// 8 or 9 dots, and twice that when the sequencer halves the dot clock (the
+// 40-column modes 0, 1, 4, 5 and 0Dh). Sync is untouched and pixels stay
+// aligned to DE, so the scaler path does not move. The delay line is a small
+// RAM addressed by a free-running dot counter.
+// (Up to release 16 the delay was two and three characters, on the belief that
+// the window opened at the wrap. Every picture sat 7 or 8 dots early, and 15 or
+// 17 dots early in the 40-column modes, which left 17 dots (0.68 us) between the
+// end of the sync and the first pixel there. A monitor that takes its black
+// level from that gap then read the picture's left edge as black and dropped
+// whole colour channels: issue #2. tests/tb_vga_porch.sv measures the sync
+// width, the porches and the window for each BIOS mode.)
+// (native 24bpp is left where it was, where a real card puts that mode is not
+// established: 16 dots of 25 MHz = 48 dots at the tripled clock. The pixel
 // assembly already adds two dots to the pixels but not to the blanking, so the
 // pixels get 46 and the blanking two more, 48: the window then covers the last
 // pixel to its end, and a pixel's three dots start on the pixel clock enable
@@ -2285,7 +2300,8 @@ end
 // pixel to the right in the scaler, release 7 to 13.)
 // One less than the dot count above: the delay line's read is registered once more below (the RAM's
 // output register, then the output registers), so the picture keeps the position it had.
-wire [7:0] vid_delay = (fb_native24 ? 8'd46 : (seq_8dot_char ? 8'd16 : 8'd27) << seq_dotclock_divided) - 8'd1;
+wire [7:0] vid_dots  = fb_native24 ? 8'd46 : ((seq_8dot_char ? 8'd24 : 8'd36) << seq_dotclock_divided) - 8'd1;   // 23, 47 (graphics), 35, 71 (text)
+wire [7:0] vid_delay = vid_dots - 8'd1;
 reg [24:0] vid_dly [0:255];
 reg  [7:0] vid_wr;
 reg        vid_blank_24;     // native 24bpp: the blanking two dots behind the pixels (one register here, one below)
