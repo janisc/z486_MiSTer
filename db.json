@@ -1,0 +1,25 @@
+{
+    "v": 1,
+    "db_id": "z486nv",
+    "timestamp": 1795028094,
+    "files": {
+        "_Computer/z486nv_20261118.rbf": {
+            "hash": "8879443d56fd5f7a3d27349fe6a85e8a",
+            "size": 4487216,
+            "url": "https://github.com/janisc/z486_MiSTer/releases/download/z486nv_20261118/z486nv_20261118.rbf",
+            "tags": [
+                "z486nv"
+            ],
+            "tangle": [
+                "z486nv_core"
+            ]
+        }
+    },
+    "folders": {
+        "_Computer": {
+            "tags": [
+                "z486nv"
+            ]
+        }
+    }
+}
