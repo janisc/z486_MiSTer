@@ -1,0 +1,2 @@
+e5bce11c5830f1e83404528867670054f05b6eba
+exp/issue2-picture-position (production profile, fitter seed 2 of the sweep of 2026-11-18, three processors): release 16 + the picture position fix of issue #2; the test build for the reporter
