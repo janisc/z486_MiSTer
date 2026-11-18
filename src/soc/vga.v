@@ -2290,17 +2290,21 @@ end
 // level from that gap then read the picture's left edge as black and dropped
 // whole colour channels: issue #2. tests/tb_vga_porch.sv measures the sync
 // width, the porches and the window for each BIOS mode.)
-// (native 24bpp is left where it was, where a real card puts that mode is not
-// established: 16 dots of 25 MHz = 48 dots at the tripled clock. The pixel
-// assembly already adds two dots to the pixels but not to the blanking, so the
-// pixels get 46 and the blanking two more, 48: the window then covers the last
-// pixel to its end, and a pixel's three dots start on the pixel clock enable
-// (46 + 2 is a multiple of 3), so the scaler and the capture sample the right
-// pixel. With both at 45 the last column was blanked and the picture sat one
+// (native 24bpp: the BIOS mode counts one byte per dot, 2,384 tripled dots a line in
+// 298 characters of eight, with its sync 256 of them long. The same pipeline of two
+// character clocks puts a real card's picture 416 tripled dots after the sync's
+// leading edge, 138.7 pixels, next to the 136 of the BIOS's 8 and 16 bpp 640x480
+// modes. Three characters less one dot would be 23 here; the blanking gets 24 and the
+// pixels 22, because the pixel assembly already adds two dots to the pixels but not
+// to the blanking: the window then covers the last pixel to its end, and a pixel's
+// three dots start on the pixel clock enable (22 + 2 is a multiple of 3), so the
+// scaler and the capture sample the right pixel. Up to release 16 the figures were
+// 46 and 48, "16 dots of 25 MHz", which put this one mode 8 pixels right of a real
+// card's place. With both at 45 the last column was blanked and the picture sat one
 // pixel to the right in the scaler, release 7 to 13.)
 // One less than the dot count above: the delay line's read is registered once more below (the RAM's
 // output register, then the output registers), so the picture keeps the position it had.
-wire [7:0] vid_dots  = fb_native24 ? 8'd46 : ((seq_8dot_char ? 8'd24 : 8'd36) << seq_dotclock_divided) - 8'd1;   // 23, 47 (graphics), 35, 71 (text)
+wire [7:0] vid_dots  = fb_native24 ? 8'd22 : ((seq_8dot_char ? 8'd24 : 8'd36) << seq_dotclock_divided) - 8'd1;   // 23, 47 (graphics), 35, 71 (text)
 wire [7:0] vid_delay = vid_dots - 8'd1;
 reg [24:0] vid_dly [0:255];
 reg  [7:0] vid_wr;

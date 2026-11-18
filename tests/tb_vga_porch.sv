@@ -7,7 +7,9 @@
 // real card does with the same registers (a pipeline of two character clocks in graphics modes,
 // three in text): the picture 144 dots after the sync's leading edge in every graphics mode and
 // 162 in text, in the 80- and the 40-column sets alike, which makes the back porch 48 / 54 dots,
-// and 32 / 36 in the 40-column modes with their longer sync. Also checked: the overscan colour
+// and 32 / 36 in the 40-column modes with their longer sync. The VGA BIOS's 24 bpp mode (112h, one byte
+// per dot, three dots a pixel) is checked in its own dots: the picture 417 tripled dots after the sync's
+// leading edge, 139 pixels. Also checked: the overscan colour
 // and pel panning do not move the window, and with the border shown it is 8 dots a side (16 in
 // the 40-column modes), all of it outside the sync.
 //
@@ -17,7 +19,7 @@
 //   $ ./obj_dir/Vtb_vga_porch
 //
 // Up to release 16 this printed 137 (13h, 12h, 10h), 129 (0Dh, 04h: back porch 17 dots), 154 (text)
-// and 145 (40-column text).
+// and 145 (40-column text), and 441 for 112h.
 module tb_vga_porch;
     logic clk_sys = 0; wire clk_vga = clk_sys;
     logic rst_n = 0;
@@ -91,6 +93,10 @@ module tb_vga_porch;
               crtc_v = 200'h2D_27_28_90_2B_A0_BF_1F_00_4F_0D_0E_00_00_00_00_9C_8E_8F_14_1F_96_B9_A3_FF;
               {gfx[0],gfx[1],gfx[2],gfx[3],gfx[4],gfx[5],gfx[6],gfx[7],gfx[8]} = 72'h00_00_00_00_00_10_0E_00_FF;
               {atc[16],atc[17],atc[18],atc[19],atc[20]} = 40'h0C_00_0F_08_00; end
+        'h112: begin misc = 8'hEF; {seqr[1],seqr[2],seqr[3],seqr[4]} = 32'h01_0F_00_0E;   // the VGA BIOS's VBE mode, as MODEDUMP reads it
+              crtc_v = 200'h25_EF_F2_86_F7_B7_0B_3E_00_40_00_00_84_00_00_00_EA_8C_DF_F0_60_E7_04_AB_FF;
+              {gfx[0],gfx[1],gfx[2],gfx[3],gfx[4],gfx[5],gfx[6],gfx[7],gfx[8]} = 72'h00_00_00_00_00_40_05_0F_FF;
+              {atc[16],atc[17],atc[18],atc[19],atc[20]} = 40'h01_00_0F_00_00; end
         default: $fatal(1, "no table for mode %0h", mode);
         endcase
         for (i = 0; i < 25; i = i + 1) crtc[i] = crtc_v[(24 - i) * 8 +: 8];
@@ -105,6 +111,8 @@ module tb_vga_porch;
         outp(12'h3C4, 8'h00); outp(12'h3C5, 8'h03);
         outp(12'h3D4, 8'h11); outp(12'h3D5, 8'h00);              // unprotect CRTC 0..7
         for (i = 0; i < 25; i = i + 1) begin outp(12'h3D4, i[7:0]); outp(12'h3D5, crtc[i]); end
+        outp(12'h3D4, 8'h3F); outp(12'h3D5, (mode == 'h112) ? 8'h01 : 8'h00);   // horizontal total bit 8 (298 characters in 24 bpp)
+        fb_native = (mode == 'h112); fb_native16 = (mode == 'h112); fb_native24 = (mode == 'h112); fb_rgb = 24'hFFFFFF;
         for (i = 0; i < 9; i = i + 1) begin outp(12'h3CE, i[7:0]); outp(12'h3CF, gfx[i]); end
         inp(12'h3DA);                                            // attribute flip-flop to "index"
         for (i = 0; i < 16; i = i + 1) begin outp(12'h3C0, i[7:0]); outp(12'h3C0, (mode == 'h13) ? i[7:0] : (i < 8 ? i[7:0] : (8'h10 + i[7:0] - 8'd8))); end
@@ -185,6 +193,7 @@ module tb_vga_porch;
         run_case("01h (text, 40 columns)",         'h01, 0, 8'h00, 4'd0,  900, 126, 162, 882);
         run_case("13h, border shown",              'h13, 1, 8'h3F, 4'd0,  800,  96, 136, 792);
         run_case("0Dh, border shown",              'h0D, 1, 8'h3F, 4'd0,  800, 112, 128, 800);
+        run_case("112h (24 bit, tripled dots)",    'h112, 0, 8'h00, 4'd0, 2384, 256, 417, 2337);
         if (errors != 0) $fatal(1, "FAILED: %0d lines off", errors);
         $display("PASS"); $finish;
     end
