@@ -35,7 +35,8 @@ The changes are on branch `native-vga`; `main` tracks upstream. Experiments live
 The rbf files of every build made along the way, with a description of each, are in
 [`builds/`](builds/BUILDS.md). Nothing here has been submitted upstream. The rbf of
 the current release is attached to the [Releases page](../../releases). The upstream
-README, unchanged, follows at the end of this file after the thanks.
+README, as it is in the version this fork is built on, follows at the end of this
+file after the thanks.
 
 ## FAQ
 
@@ -50,8 +51,8 @@ made along the way, with notes, is in [`builds/`](builds/BUILDS.md).
 Connect it to the analog output and make sure MiSTer.ini has `composite_sync=0`.
 Nothing else. The core puts real VGA timing on that port, 31.5 kHz with separate
 horizontal and vertical sync, which is what any VGA monitor from 1987 on accepts;
-the framework's composite sync option would merge the two syncs, and a PC monitor
-does not take that. There is no multisync requirement and no OSD setting.
+the framework's composite sync option would merge the two syncs, and many PC
+monitors do not take that. There is no multisync requirement and no OSD setting.
 
 **Can I use HDMI instead of, or together with, the VGA output?**
 Yes, both are always on. HDMI carries the scaler picture as on every core, the
@@ -264,9 +265,10 @@ uneven pixel widths. With what the earlier releases had taught, the proper way g
 another go: a reconfigurable PLL generates the real pixel clock of every mode, the
 renderer follows it, and the output stage puts every pixel edge on that clock. What
 it changes for you: direct-video scalers get a standard timing at the true pixel
-clock with the repetition count at 1, so a RetroTINK-4K should sample the picture
-pixel for pixel (none was available for testing, so reports from one are very
-welcome, good or bad); the analog port is exact in every mode, where the old step
+clock with the repetition count at 1, so a RetroTINK-4K samples the picture pixel
+for pixel (none was at hand here; the owner of a RetroTINK-4K Pro who had reported
+the blank band confirmed on release 14 that it is gone, issue #1); the analog port
+is exact in every mode, where the old step
 was 30 % of a pixel in the 320- and 640-wide modes, 42 % at 800x600, 76 % at 1024x768
 and 89 % in 24-bit colour; the TV output is cut from the same exact raster. The
 trade-offs, said plainly: it is a big change to the video path, so there may be bugs
@@ -351,8 +353,10 @@ implements only the bank bit for the second megabyte and reads back 11h for the
 usual 33h probe, so SciTech UniVBE / Display Doctor 5.3a and later install and
 provide VBE 2.0 (banked), while the 2 MB the BIOS reports are really usable (VBE
 modes above 1 MB, the sixteen pages of 320x200 hi-colour). The RAMDAC is modelled
-on the Sierra SC15025 HiColor DAC the Tseng BIOS probes for (hidden command
-register behind four reads of 3C6h, extended registers), so the 15-bit or 16-bit
+on the HiColor DAC the Tseng BIOS probes for, an SGS-Thomson STG1700-family part
+(hidden command register behind four reads of 3C6h, indexed registers through the
+same port; earlier versions of this text named a Sierra SC15025, which reaches its
+extended registers through 3C7h and 3C8h), so the 15-bit or 16-bit
 pixel format of the hi-colour modes is whatever the BIOS or the driver programmed.
 The pel mask is applied to the pixels like a real DAC does. The 320x200 hi-colour
 modes (halved dot clock, like mode 13h) are shown natively too, and a display-start
@@ -392,7 +396,7 @@ This fork exists because of other people's work:
 ---
 
 > **The original README.** Everything below is nand2mario's README of the upstream
-> core as it was when forked, kept unchanged.
+> core, as it is in the version this fork is built on, unchanged.
 
 # z486 MiSTer core
 

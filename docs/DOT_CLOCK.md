@@ -20,8 +20,9 @@ binary, the same RTL at fitter seed 4):
   in every mode, and 3 in 24bpp where a pixel is three dots. Release 13 reports 3 in text, 4 in
   the 640-dot modes and 2 in 800x600 (see "Why" below).
 
-Not tested by the author: a RetroTINK-4K or a Morph on the direct-video output (the repetition
-numbers say it should be pixel-exact now; reports are welcome), and the HDMI scaler's behaviour at
+A RetroTINK-4K on the direct-video output was not at hand; the owner of a RetroTINK-4K Pro who had
+reported the blank band (issue #1) confirmed on release 14 that it is gone. Not tested: a Morph on
+the direct-video output, and the HDMI scaler's behaviour at
 mode switches over a long session (the scaler sees a new input clock at each switch, like it does
 on cores that switch their video PLL). No game list was run on the release binary beyond the
 owner's usual spot checks. The core sits at 98 % of the device, see "Cost". Release 14 also
