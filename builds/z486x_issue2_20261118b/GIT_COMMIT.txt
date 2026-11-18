@@ -1,0 +1,2 @@
+7201c5ecff57134d443c69cfa24a9cc5fbe487ff
+exp/issue2-picture-position (production profile, fitter seed 4 of the evening sweep of 2026-11-18, three processors): release 16 + the complete picture position fix of issue #2 (the 24bpp mode included) = release 17 (z486nv_20261118)

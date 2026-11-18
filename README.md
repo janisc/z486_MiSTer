@@ -12,31 +12,78 @@ kinds of display.
   framebuffer modes (256-colour, 15/16-bit and 24-bit) are rendered natively as well,
   up to 1024x768, so the analog port never hands over to the scaler.
 - **A 15 kHz TV or arcade monitor** gets a real 15 kHz raster (`Analog output: TV 15kHz`
-  in the OSD, since release 10): the scan-doubled 320x200 and 320x240 modes come out
+  in the OSD): the scan-doubled 320x200 and 320x240 modes come out
   as true 240p, text and the 640-wide modes as every other row or as two interlaced
   fields, the 70 Hz modes padded to 60 Hz for sets that lock to 60 only, with the
   picture size and position adjustable from the OSD. Modes the set cannot show are
   blanked rather than sent.
 
 HDMI works as on every core in both cases and shows the same picture through the
-scaler. Since release 14 the raster is timed by a real pixel clock from a
-reconfigurable PLL instead of a counter on the system clock, so both outputs and
-direct video get exact pixel timing in every mode; the FAQ says what that changes
-and what it costs. The FAQ below also has the setup for each display, what works
-and what does not.
+scaler. The raster is timed by a real pixel clock from a reconfigurable PLL, so both
+outputs and direct video get exact pixel timing in every mode. The quick start below
+has the setup for each display, the FAQ what works and what does not.
 
-Since release 11 the core also carries, as an experiment and off by default, a
+The core also carries, as an experiment and off by default, a
 **Gravis UltraSound**: xolod79's GF1 model from ao486 with its sample memory in the
 HPS DDR3, since z486 keeps its main memory in the SDRAM. The FAQ has the settings
 and [docs/GUS.md](docs/GUS.md) the how.
 
+## Quick start
+
+Copy `z486nv_<date>.rbf` from the [Releases page](../../releases) to
+`/media/fat/_Computer`. The boot ROMs, the disk images, the SDRAM module and the MiSTer
+main version are the stock core's (the upstream README at the end has them). Then, by
+display:
+
+| Display | MiSTer.ini | OSD |
+|---|---|---|
+| VGA monitor on the analog port | `composite_sync=0` | nothing to set |
+| 15 kHz TV or arcade monitor on the analog port | `composite_sync=1` if the set wants its sync on one line, as SCART sets do | Audio & Video: `Analog output` to `TV 15kHz` |
+| HDMI | nothing; `vsync_adjust=0` or `1` if the display refuses 70 Hz | nothing to set |
+| Direct video (a DAC or a scaler on the HDMI connector) | `direct_video=1`, and `composite_sync=0` for a VGA monitor behind it | nothing to set |
+
+The analog port and HDMI work at the same time. The FAQ has the reasons and the details
+for each display, and how update_all can install the core and keep it current.
+
+## What is new in release 17
+
+Where the picture sits against the sync pulse on the analog output. A CRT sets its
+black level in the short gap after the horizontal sync, and in the 320-pixel EGA and
+CGA modes and in 40-column text the core left only 0.68 us there, where a real card
+leaves 1.27 us. A monitor that samples for longer than that takes the left edge of the
+picture for black, and whole colours drop out or dim with whatever the game draws
+there. That is the likely cause of issue #2 (Jill of the Jungle in EGA without its
+blue, Commander Keen losing red as its map scrolled). Other monitors never showed the
+fault, the test monitor here among them, so the word of a monitor that did is still to
+come; HDMI was not affected. Every mode was in fact a little early: 7 dots in the
+640-dot graphics modes, 8 in text, 15 and 17 in the 40-column modes, because the raster
+opens its picture window one character before the line wrap and the delay that stands
+in for a real card's pixel pipeline did not count that. Now the picture starts 144 dots
+after the sync's leading edge in every graphics mode and 162 in text, as IBM's register
+sets intend, and the 24-bit mode moved 8 pixels left to its real place beside the other
+640x480 modes. On a CRT every mode sits about 3 mm further right than before, the
+320-pixel EGA and CGA modes twice that, so the monitor's horizontal position may want
+one touch; EGA 320x200 games now line up with mode 13h games. The picture through the
+HDMI scaler is unchanged, and so is the TV output, which cuts the picture out of the
+raster and places it by its own timing. Nothing in the settings resets.
+`tests/tb_vga_porch.sv` checks the sync width, the gaps and the picture window for
+each BIOS mode.
+
+Also new: update_all and the MiSTer Downloader can install the core and keep it current,
+through a database of the fork's own; the FAQ says how to switch that on.
+
+What the earlier releases changed is in [CHANGELOG.md](CHANGELOG.md).
+
+## Where things are
+
 The changes are on branch `native-vga`; `main` tracks upstream. Experiments live on
 `exp/*` branches; the pixel clock's development history is `exp/dot-clock-master`.
-The rbf files of every build made along the way, with a description of each, are in
-[`builds/`](builds/BUILDS.md). Nothing here has been submitted upstream. The rbf of
-the current release is attached to the [Releases page](../../releases). The upstream
-README, as it is in the version this fork is built on, follows at the end of this
-file after the thanks.
+The rbf of the current release is attached to the [Releases page](../../releases); what
+each release changed is in [CHANGELOG.md](CHANGELOG.md); the rbf files of every build
+made along the way, with a description of each, are in [`builds/`](builds/BUILDS.md).
+Branch `db` carries nothing but the MiSTer Downloader's database of the fork and its ini
+file. Nothing here has been submitted upstream. The upstream README, as it is in the
+version this fork is built on, follows at the end of this file after the thanks.
 
 ## FAQ
 
@@ -46,6 +93,28 @@ Download `z486nv_<date>.rbf` from the [Releases page](../../releases) and copy i
 the stock core's: the boot ROMs and disk images in `/media/fat/games/Z486`, the SDRAM
 module, the MiSTer main version (see the upstream README at the end). Every build
 made along the way, with notes, is in [`builds/`](builds/BUILDS.md).
+
+**Can update_all or the MiSTer Downloader install and update it?**
+Yes, from release 17 on, through a database of the fork's own; the core is not part of
+the MiSTer distribution or of update_all's lists. Put a file named
+`downloader_z486nv.ini` into the root of the SD card (`/media/fat`), next to
+`downloader.ini`, with these three lines:
+
+```ini
+[z486nv]
+db_url = https://raw.githubusercontent.com/janisc/z486_MiSTer/db/db.json
+filter = z486nv
+```
+
+The file is also [on the `db` branch](../../blob/db/downloader_z486nv.ini), ready to copy.
+From then on every run of update_all or of the Downloader installs the current
+`z486nv_<date>.rbf` in `_Computer` and removes the one it installed before. That one file
+is all the database touches: no ROMs, no disk images, no settings, and nothing of the
+stock core, which keeps coming from upstream. A core you copied in by hand under an older
+date is not removed, so delete it once. The `filter` line keeps a download filter of your
+own, if you have set one, from skipping this core. Drop-in files like this are read by
+Downloader 2.4 (March 2026) and newer; the same three lines at the end of `downloader.ini`
+do the same. To leave, delete the ini file and the core.
 
 **I use a VGA monitor. What do I need?**
 Connect it to the analog output and make sure MiSTer.ini has `composite_sync=0`.
@@ -128,6 +197,14 @@ the HDMI pins. For a VGA monitor on the DAC add `composite_sync=0`. If the same
 ini serves other cores, `forced_scandoubler=1` keeps them at 31 kHz too; this core
 ignores it, its raster is never below 31 kHz.
 
+**How do I tell the fork from the stock core, and can I keep both?**
+The builds are named `z486nv_<date>` (nv for native video) so they sit next to the
+stock `z486_<date>.rbf` in `_Computer`; load whichever you want. Both report the same
+core name to MiSTer, so they share `config/Z486.CFG` (OSD settings, boot order, the
+mounted images), the `games/Z486` folder and the `[z486]` section of MiSTer.ini. The
+OSD's bottom line shows `nv-yymmdd` on this fork and, from z486 20261012 on, `vyymmdd`
+on the stock core, which is how you tell which one is loaded.
+
 **Do I need UniVBE?**
 Not for games that use the BIOS's VBE 1.2 modes, which includes the 15/16/24-bit
 hi-colour ones. Games that require VBE 2.0 need SciTech UniVBE or Display Doctor
@@ -163,62 +240,6 @@ default, as upstream and ao486 have it. The aim was to remove
 combinations that did not make sense, not functionality; if something you need is
 missing, open an issue.
 
-**Which games and demos have been tested?**
-On the CRT: DOS text modes, Doom, Commander Keen (EGA), SimCity 2000 and Panzer
-General (640x480x256), Steel Panthers, Indiana Jones Desktop Adventures under
-Windows 3.1 (640x480 hi-colour), Scorched Earth 1.5 at 1024x768 (256 colours), the demos Copper (per-line raster tricks) and
-Legend, and SciTech's VBETEST in every colour depth including 16-page 320x200
-hi-colour page flipping. On release 11 (z486 20261003) the regression list was run
-again: Doom, Descent, Lemmings, Full Throttle, Day of the Tentacle, Commander Keen 2,
-Alone in the Dark, BattleTech, SimCity 2000, Copper, Legend, Demoded and Indiana Jones
-Desktop Adventures run; with the Gravis UltraSound, Second Reality, Legend and
-Demoded. Release 12 (z486 20261006) was spot-checked rather than run through the
-list: Alone in the Dark 2, Crusader: No Regret and Second Reality with the Sound
-Blaster run now, Beneath a Steel Sky with `RAM Size` at 16 MB, and the titles tried
-from the list ran as before. Release 13 (z486 20261012) got an automatic boot check
-instead of the list: a script loads launcher after launcher from a 349-title collection
-and photographs the screen until it holds still. Of the first 37, all started except
-Aladdin (an XMS allocation error, the same on the stock core) and Apache (its disk image had
-its drivers commented out; with that repaired it page-faults on every z486, stock included,
-while ao486 runs it, a matter for upstream). The usual list of games was then launched by
-hand on the release binary. The test tools (register dumps, retrace counters, VRAM banking, a resident
-INT 10h logger, the GUS memory tests) and the debug floppy are described in
-[`builds/BUILDS.md`](builds/BUILDS.md). Release 14 (the pixel clock) was checked
-with the fork's own test programs in every mode on a VGA CRT, a 15 kHz TV and an
-HDMI-to-VGA adapter, not through the game list, and still shipped a one-dot cut that
-the owner's eye caught in FastDoom's startup text. Release 15 added the probe that
-would have caught it (a line of block characters and a pixel ruler, measured column
-by column on the capture in every mode class) and was spot-checked by hand; the game
-list was not run, so reports are welcome.
-
-**Which z486 is this built on, and what is known not to work?**
-Releases 15 and 16 are built on z486 20261025 (the shared folder, the lower CPU
-speeds and the game fixes above); release 16 differs from 15 by one line in the
-Gravis UltraSound, see the last entry of this list. Release 14 was built on z486
-20261012 like release 13; what
-changed in it was the fork's own video path (the pixel clock) and a 24-bit fix: the
-picture sat one pixel to the right of its window and the last column was black, since
-release 7. Release 13 was built on z486 20261012; everything new in it was upstream's
-work. The
-CPU gained real x87 transcendentals (FSINCOS, FPREM1, FXTRACT and FYL2XP1 were no-ops
-before), FST ST(i), FFREEP and FBLD, hardware breakpoints, a faster memory path and a
-set of game fixes (SHLD/SHRD with 16-bit operands, the TSS access flag, MOV to the
-debug registers, the AC flag on interrupt entry). Around it: critical-word-first SDRAM
-bursts, one-cycle chain-4 dword writes to the VGA, the SVGA linear framebuffer at
-248 MB where UniVBE looks for it, coprocessor errors on IRQ 13 with IGNNE# at port
-F0h (made for Wolfenstein 3D's FPU check under EMM386), no CMOS coprocessor with the
-x87 switched off, and two more joystick types (CH Flightstick Pro, Thrustmaster FCS).
-Known from release 12 and not retested: Beneath a Steel Sky wants `RAM Size` at
-16 MB; with more memory it ended in a General Protection Fault, a matter noted in
-upstream's release notes. Four settings read differently after this release, because
-their bits moved or changed meaning: `Analog output`, the `TV` options and `Gravis
-UltraSound` come back at their defaults (VGA 31 kHz, GUS off), and `Border` is off by
-default now, so a saved `No` shows as `Yes` once; set them again, the rest of
-`Z486.CFG` is kept. Still there from release 12: the Hardware page's switches for the
-CPU's fast paths, L1 cache and x87 (`CPU Pipeline: Compatible` is the one to try when
-a program misbehaves) and the `RAM Size` order that gives a fresh configuration
-64 MB. The fork's own limits are in the entry below.
-
 **Which modes do not work on the CRT?**
 A full VBETEST sweep of every VBE mode found these limits. 1280x1024 loses the CRT: this
 BIOS runs it interlaced from a 36 MHz clock, below 30 kHz (HDMI shows it). 1024x768 in 8 and
@@ -237,6 +258,81 @@ three bytes per pixel and a start address counted in four-byte units cannot expr
 CRT snaps to 2.67-pixel steps and HDMI shows the window displaced. No program scrolls a
 banked 24-bit buffer that way.
 
+**What else is known not to work?**
+The video limits of the fork are in the entry above. What the tests have turned up
+beyond them shows on the stock core as well:
+
+- Apache page-faults at startup on every z486, stock included, while ao486 runs it.
+- Aladdin stops with an XMS allocation error, the same on the stock core.
+- Beneath a Steel Sky wants `RAM Size` at 16 MB. With more memory it ended in a General
+  Protection Fault when it was last tried, on release 12, a matter noted in upstream's
+  release notes.
+
+When a program misbehaves, `CPU Pipeline: Compatible` on the OSD's Hardware page is the
+first thing to try; the page also has switches for the L1 cache and the x87. On the
+fork's side: the core fills 98 % of the FPGA, about a thousand logic cells of that for
+reprogramming the pixel clock, so there is little room for more. The Gravis UltraSound
+has fixed resources and has not been tried together with an SVGA game (see its entry).
+And the fault of issue #2 never showed on the test monitor, so release 17's cure for it
+rests on measurement, not yet on a monitor that showed it.
+
+**Which z486 is this built on?**
+Release 17 is built on z486 20261025 (nand2mario main `c1b99f3`), as releases 15 and 16
+are; it was upstream's current version on the day of the release. From upstream come,
+among much else, the x87 with real transcendentals, the shared folder with DOS through
+MISTERFS, CPU speeds down to 3 MHz-equivalent for speed-sensitive software and the game
+fixes of every version up to that one; the upstream README at the end describes the
+core itself. The fork changes the video path and adds the sound card; the CPU is
+upstream's, unchanged. Which upstream version each release was built on, and what came
+with it, is in [CHANGELOG.md](CHANGELOG.md).
+
+**How is it tested?**
+Every release binary is tried on real hardware before it goes out: a VGA CRT on the
+analog port and an HDMI display, and for the changes that touch them a 15 kHz TV and an
+HDMI-to-VGA adapter on direct video. Around that there are four kinds of checks:
+
+- The fork's own DOS test programs: register and mode dumps, retrace counters, edge
+  blocks and a pixel ruler that are measured column by column on a capture in every
+  mode class, VRAM banking, a resident INT 10h logger, memory and DMA read-back tests
+  for the Gravis UltraSound. They and the debug floppy are described in
+  [`builds/BUILDS.md`](builds/BUILDS.md).
+- SciTech's VBETEST in every colour depth, including 16-page 320x200 hi-colour page
+  flipping, as the regression suite for the SVGA framebuffer modes.
+- An automatic boot check: a script loads launcher after launcher from a 349-title
+  collection and takes screenshots until the picture holds still. Since release 17 it
+  also photographs the CRT for every title and compares each end screen with the
+  previous release's. A release gets a part of the collection, a few dozen titles, not
+  all of it.
+- Simulation where the right answer is a number: `tests/tb_vga_porch.sv` holds the sync
+  width, the gaps and the picture window of each BIOS mode against a real card's, and a
+  camera then measures the picture's place on the CRT.
+
+Run by hand on the CRT at one release or another: DOS text modes, Doom, Commander Keen
+1 and 2 (EGA), SimCity 2000 and Panzer General (640x480x256), Steel Panthers, Indiana
+Jones Desktop Adventures under Windows 3.1 (640x480 hi-colour), Scorched Earth 1.5 at
+1024x768, Descent, Lemmings, Full Throttle, Day of the Tentacle, Alone in the Dark 1 and
+2, BattleTech, Crusader: No Regret, Beneath a Steel Sky, and the demos Copper (per-line
+raster tricks), Legend, Demoded and Second Reality, the last three with the Gravis
+UltraSound as well. What each release was checked with is in
+[CHANGELOG.md](CHANGELOG.md). No release is run through every game, so reports are
+welcome.
+
+**How do I report a problem?**
+Open an issue on this repository. What helps most:
+
+- the release, as the OSD's bottom line shows it (`nv-yymmdd`);
+- the display and how it is connected: analog port, HDMI or direct video, and the model
+  of the monitor or TV;
+- the program, and its video mode if you know it;
+- the video settings of your MiSTer.ini (`composite_sync`, `vsync_adjust`,
+  `vga_scaler`, `direct_video`) and the OSD's `Analog output`;
+- a photo of the screen, which says more than a description.
+
+If you can, try the same on the stock core (`z486_<date>.rbf`). A fault that is there
+too comes with what the fork inherits, and upstream is the place for it
+([nand2mario/z486_MiSTer](https://github.com/nand2mario/z486_MiSTer), or the forum
+thread linked in the upstream README below); one that only the fork shows is ours.
+
 **Will this go into z486 or ao486?**
 Maybe. This started as an experiment and we are happy with the result, but more
 testing by more people is needed first. Do not wait for pull requests: the code is
@@ -244,75 +340,15 @@ here under the same terms as the files it lives in (the ao486 BSD licence for th
 video code, Apache 2.0 for the z486 CPU), so if you want it somewhere, take it
 there.
 
-The builds are named `z486nv_<date>` (nv for native video) so they sit next to the
-stock `z486_<date>.rbf` in `_Computer`; load whichever you want. Both report the same
-core name to MiSTer, so they share `config/Z486.CFG` (OSD settings, boot order, the
-mounted images), the `games/Z486` folder and the `[z486]` section of MiSTer.ini. The
-OSD's bottom line shows `nv-yymmdd` on this fork and, from z486 20261012 on, `vyymmdd`
-on the stock core, which is how you tell which one is loaded.
-
-**What changed in release 14, and why a real pixel clock?**
-Until release 13 the picture was timed by the core's single 85 MHz clock, with a
-counter standing in for each mode's pixel clock: a 25.175 MHz pixel lasted three
-clocks or four, 3.376 on average. That was the simpler way to build it, and it had
-its merits: one clock domain, nothing to reprogram, and for the modes most games use
-a CRT does not show a 12 ns wobble on a 40 ns pixel. It stopped being good enough in
-two places. Scalers that take the raw raster over HDMI (direct video) are told the
-pixel rate as a whole number of clocks, so a 640-pixel mode came out 540 pixels wide
-on a RetroTINK-4K, with a blank band. And in the high-resolution and high-colour
-modes, where a pixel is only one or two clocks long, the approximation showed as
-uneven pixel widths. With what the earlier releases had taught, the proper way got
-another go: a reconfigurable PLL generates the real pixel clock of every mode, the
-renderer follows it, and the output stage puts every pixel edge on that clock. What
-it changes for you: direct-video scalers get a standard timing at the true pixel
-clock with the repetition count at 1, so a RetroTINK-4K samples the picture pixel
-for pixel (none was at hand here; the owner of a RetroTINK-4K Pro who had reported
-the blank band confirmed on release 14 that it is gone, issue #1); the analog port
-is exact in every mode, where the old step
-was 30 % of a pixel in the 320- and 640-wide modes, 42 % at 800x600, 76 % at 1024x768
-and 89 % in 24-bit colour; the TV output is cut from the same exact raster. The
-trade-offs, said plainly: it is a big change to the video path, so there may be bugs
-the tests did not reach, and an issue with the mode and a photo is the best help;
-and the clock reprogramming costs about a thousand logic cells, so the core is at
-98 % of the chip with no idea yet of how to make that smaller.
-[docs/DOT_CLOCK.md](docs/DOT_CLOCK.md) has the engineering. Release 14 itself shipped
-with a one-dot cut at the left of every line in all modes but 24-bit (a slip in its
-24-bit fix, not the clock); release 15 corrects it, see the next entry.
-
-**What changed in release 15?**
-Two things. The cut dot of release 14: the window that gates the picture opened one
-dot after the pixels in every mode but 24-bit colour, so the first pixel column was
-missing and the last column black, on the analog port, the TV and HDMI alike (in
-text: one-pixel left stems on M, P and R in the first column). The blanking is back
-with its pixels, measured column by column in text, 13h, 640x480, 24-bit and
-1024x768. And z486 20261025 underneath, all of it upstream's work: a shared folder
-with DOS through MISTERFS (`/media/fat/games/Z486/shared` as a DOS drive: the
-current ao486 `MISTERFS.EXE` on the DOS disk, `X=CE00-CFFF` on the EMM386 line,
-`MISTERFS E /Q`; MiSTer main 20260823 or newer), four lower CPU speeds in the OSD (6,
-5, 4 and 3 MHz-equivalent) for speed-sensitive software, and fixes for Might and Magic
-II's speaker music, Fistfight's false "INI file corrupt" error, Dragonsphere's intro
-music, Discworld II's movie-audio clicks and the x87's rounding status bit. Nothing
-in the settings resets.
-
-**What changed in release 16?**
-One line, in the Gravis UltraSound. A DMA transfer from the card's memory to the PC
-(the direction a program uses to read samples back; uploads go the other way and were
-always right) came back garbled, every value repeated about six times and the stream
-behind. The card model raised its read request for the whole of its clock slot
-instead of once at the slot's edge, as the write side already did, so it answered each
-request several times over. The fix is xolod79's, from ao486 (ao486_MiSTer PR #237);
-the fork's GUS is otherwise unchanged. A read-back test (4 KB written through the
-card's memory port, fetched back by DMA, compared) goes from 4,081 bytes wrong of
-4,096 to none. Everything else is release 15: the same z486 20261025 underneath, the
-same video path, nothing in the settings resets.
-
 ## How it works
 
 The analog VGA port always carries the core's own raster: the real 25.175 and
 28.322 MHz dot clocks (tripled for the 24bpp mode), 31.5 kHz lines at 70 Hz
 (mode 13h, text) or 60 Hz (640x480), the sync polarity a VGA card uses
 (400-line modes H-/V+, 350-line H+/V-, 480-line H-/V-), and the picture placed
-after hsync where a real card puts it. The SVGA framebuffer modes (8, 16 and
+after hsync where a real card puts it: 144 dots after the sync's leading edge in
+every graphics mode and 162 in text, checked for each BIOS mode by
+`tests/tb_vga_porch.sv`. The SVGA framebuffer modes (8, 16 and
 24bpp) are fetched from the DDR3 framebuffer line by line and shown the same way,
 so the port never hands over to the scaler. The only OSD switch is `Analog
 output`, which chooses the raster the port carries; the HDMI output is always the
@@ -320,7 +356,7 @@ scaler, and the exceptions in the FAQ are MiSTer.ini settings handled by the
 framework. The `Border` option shows or hides the overscan border on both outputs (the framework
 blanks the analog picture with the same signal the scaler crops to).
 
-Since release 14 the raster is timed by a real pixel clock. A reconfigurable PLL
+The raster is timed by a real pixel clock. A reconfigurable PLL
 generates each mode's rate (25.175, 28.322, 32.5, 35.9 and 65 MHz, 75 MHz for 24-bit
 colour, each nudged by a few hundred ppm so that a line is a whole number of cycles
 of both clocks); the renderer keeps the 85 MHz system clock with its pixel enable
@@ -329,7 +365,8 @@ into the pixel-clock domain, so the DAC switches on dot boundaries and the HDMI
 direct-video stream is a standard timing with repetition 1. The PLL is reprogrammed
 at each mode switch by the framework's reconfiguration block.
 [docs/DOT_CLOCK.md](docs/DOT_CLOCK.md) has the pieces, the measurements and the
-lessons.
+lessons; why it replaced the counter of the first thirteen releases, and what it
+costs, is in [CHANGELOG.md](CHANGELOG.md) under release 14.
 
 In TV mode a line store (`src/soc/vga_tv15.sv`) sits between the raster and the
 analog port. Every VGA line lasts 31.8 us whatever the mode, so the store captures
