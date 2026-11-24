@@ -301,10 +301,12 @@ wire  [4:0] vol_line_r;
 wire  [1:0] vol_spk;
 wire  [4:0] vol_en;
 reg  [16:0] spk_out;
-reg  [16:0] mix_tmp_l;
-reg  [16:0] mix_tmp_r;
-reg  [15:0] mix_dry_l;
-reg  [15:0] mix_dry_r;
+reg  [18:0] mix_tmp_l;
+reg  [18:0] mix_tmp_r;
+wire [15:0] mix_dry_l;
+wire [15:0] mix_dry_r;
+reg   [8:0] dc_div = 0;
+wire        dc_ce = &dc_div;   // CLK_AUDIO / 512 = 48 kHz
 reg  [15:0] core_audio_l_r;
 reg  [15:0] core_audio_r_r;
 wire        dummy_sd_clk;
@@ -1106,25 +1108,28 @@ always @(posedge CLK_AUDIO) begin
 		core_audio_l_r <= master_l;
 		core_audio_r_r <= master_r;
 
-		mix_tmp_l <= spk_out
-		           + {2'b00, sample_cms_l, sample_cms_l[8:4]}
-		           + {sb_l_swap[15], sb_l_swap}
-		           + {opl_l[15], opl_l}
-		           + {sample_gus_l[15], sample_gus_l}
-		           + (vol_en[2] ? {cd_l[15], cd_l} : 17'd0)
-		           + (mt32_mute ? 17'd0 : {mt32_l[15], mt32_l});
-		mix_tmp_r <= spk_out
-		           + {2'b00, sample_cms_r, sample_cms_r[8:4]}
-		           + {sb_r_swap[15], sb_r_swap}
-		           + {opl_r[15], opl_r}
-		           + {sample_gus_r[15], sample_gus_r}
-		           + (vol_en[1] ? {cd_r[15], cd_r} : 17'd0)
-		           + (mt32_mute ? 17'd0 : {mt32_r[15], mt32_r});
+		// 19 bits: the sum of all sources cannot wrap
+		mix_tmp_l <= {2'b00, spk_out}
+		           + {3'b000, 2'b00, sample_cms_l, sample_cms_l[8:4]}
+		           + {{3{sb_l_swap[15]}}, sb_l_swap}
+		           + {{3{opl_l[15]}}, opl_l}
+		           + {{3{sample_gus_l[15]}}, sample_gus_l}
+		           + (vol_en[2] ? {{3{cd_l[15]}}, cd_l} : 19'd0)
+		           + (mt32_mute ? 19'd0 : {{3{mt32_l[15]}}, mt32_l});
+		mix_tmp_r <= {2'b00, spk_out}
+		           + {3'b000, 2'b00, sample_cms_r, sample_cms_r[8:4]}
+		           + {{3{sb_r_swap[15]}}, sb_r_swap}
+		           + {{3{opl_r[15]}}, opl_r}
+		           + {{3{sample_gus_r[15]}}, sample_gus_r}
+		           + (vol_en[1] ? {{3{cd_r[15]}}, cd_r} : 19'd0)
+		           + (mt32_mute ? 19'd0 : {{3{mt32_r[15]}}, mt32_r});
 	end
 
-	mix_dry_l <= (^mix_tmp_l[16:15]) ? {mix_tmp_l[16], {15{mix_tmp_l[15]}}} : mix_tmp_l[15:0];
-	mix_dry_r <= (^mix_tmp_r[16:15]) ? {mix_tmp_r[16], {15{mix_tmp_r[15]}}} : mix_tmp_r[15:0];
+	dc_div <= dc_div + 1'd1;
 end
+
+mix_dc_block dcb_l(CLK_AUDIO, dc_ce, mix_tmp_l, mix_dry_l);
+mix_dc_block dcb_r(CLK_AUDIO, dc_ce, mix_tmp_r, mix_dry_r);
 
 assign core_audio_l = core_audio_l_r;
 assign core_audio_r = core_audio_r_r;
@@ -1547,6 +1552,28 @@ wire mt32_lcd = mt32_lcd_on & mt32_lcd_en;
 
 endmodule
 
+// Takes a constant offset out of the mix, as the coupling capacitors of a real sound card do, and saturates to
+// 16 bits. A Sound Blaster DSP holds its last value for ever (Monkey Island leaves it at full scale): inaudible by
+// itself, but it takes the mix's headroom on one side and pushes everything past the knee of Audio Boost, which
+// then attenuates instead of amplifying. First-order high-pass; with a 48 kHz ce the corner is at 48000 / (2 pi 2^11) = 3.7 Hz.
+module mix_dc_block
+(
+	input             clk,
+	input             ce,
+	input      [18:0] inp,
+	output reg [15:0] out
+);
+
+reg  [29:0] acc = 0;                                             // the offset, 19.11 bits
+wire [19:0] ac  = {inp[18], inp} - {acc[29], acc[29:11]};        // the mix without it
+
+always @(posedge clk) begin
+	if(ce) acc <= acc + {{10{ac[19]}}, ac};
+	out <= (&ac[19:15] | ~|ac[19:15]) ? ac[15:0] : {ac[19], {15{~ac[19]}}};
+end
+
+endmodule
+
 module acompr
 (
 	input             clk,
@@ -1576,7 +1603,8 @@ always @(posedge clk) begin
 	v2  <= (v < comp_x2[15:0]) ? (v * comp_a2) : (((v - comp_x2[15:0])/comp_f2) + comp_b2[15:0]);
 	vs1 <= vs;
 
-	v3  <= mode ? v2 : v1;
+	// The curve reaches 32768..32771 at the top of the range: saturate, or the sign flips (a loud crack)
+	v3  <= (mode ? v2[15] : v1[15]) ? 16'h7FFF : mode ? v2 : v1;
 	vs3 <= vs1;
 
 	out <= vs3 ? -v3 : v3;
