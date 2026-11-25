@@ -1,0 +1,2 @@
+3dc274c32b534bd0ddbb7801476759cb64fbf3b6
+build of exp/audio-boost-dc (production profile, fitter seed 11 of the sweep of 2026-11-24, three processors): release 17 + the audio mix fix (no constant offset, no wrap in Audio Boost); a test build, not a release
